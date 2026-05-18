@@ -1,9 +1,7 @@
-name: Android
+name: Android SDK Build
 
 on:
   push:
-    branches: [ "master" ]
-  pull_request:
     branches: [ "master" ]
 
 jobs:
@@ -14,17 +12,14 @@ jobs:
       contents: write
 
     steps:
-    # ۱. آزاد کردن حدود ۳۰ گیگابایت فضای دیسک
-    - name: Free Disk Space
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: true
-        android: false
-        dotnet: true
-        haskell: true
-        large-packages: true
-        docker-images: true
-        swap-storage: true
+    # ۱. استفاده از پاکسازی قوی‌تر برای اطمینان از فضای کافی برای WebRTC
+    - name: Maximize Build Space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /opt/ghc
+        sudo docker image prune --all --force
+        df -h
 
     - name: Checkout
       uses: actions/checkout@v4
@@ -33,11 +28,11 @@ jobs:
         token: ${{ secrets.GITHUB_TOKEN }}
         persist-credentials: true
 
-    - name: Configure Git to use Token
+    - name: Configure Git
       run: |
         git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
-    # ۲. تنظیم کش برای ذخیره سازی ACE و فایل‌های ساخته شده
+    # ۲. فراخوانی کَش (اینجا همان فایل‌های بیلد قبلی شما را برمی‌گرداند)
     - name: Cache Build Data
       uses: actions/cache@v4
       with:
@@ -65,23 +60,20 @@ jobs:
 
     - name: Install dependencies
       working-directory: ${{github.workspace}}/Build
-      run: sudo make depend-ubuntu24-android
+      run: sudo apt-get install -y autoconf cmake doxygen libtool nasm ninja-build p7zip-full pkg-config wget xz-utils
 
-    # ۳. بیلد فقط برای ARMv7 و ARM64 (حذف x86 و تست‌های جاوا)
+    # ۳. فعال کردن WebRTC (تغییر از OFF به ON)
     - name: Build TeamTalk SDK (v7a and v8a)
       working-directory: ${{github.workspace}}/Build
       run: |
-        make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=OFF -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-armeabi-v7a
-        make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=OFF -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
-        make CMAKE_BUILD_EXTRA="--target install" android-armeabi-v7a
-        make CMAKE_BUILD_EXTRA="--target install" android-arm64-v8a
+        make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-armeabi-v7a
+        make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
       env:
         ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    # ۴. آپلود فقط فایل‌های .so و SDK نهایی
     - name: Upload TeamTalk SDK (.so files)
       uses: actions/upload-artifact@v4
       with:
-        name: teamtalk-sdk-android-so
+        name: teamtalk-sdk-android-so-WITH-WEBRTC
         path: ${{runner.workspace}}/install-android
