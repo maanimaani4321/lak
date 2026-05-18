@@ -42,9 +42,9 @@ jobs:
           ndk-version: r26b
 
       - name: build_sdk_v7
-        # خط working-directory پاک شد تا دستور مستقیما در کنار فایل Makefile اجرا شود
+        working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" android-armeabi-v7a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-armeabi-v7a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
@@ -54,15 +54,11 @@ jobs:
           mkdir -p output_v7/libs
           mkdir -p output_v7/headers
           
-          # فقط نسخه استاندارد کپی می‌شود (نسخه Pro نادیده گرفته می‌شود)
           cp Library/TeamTalk_DLL/armeabi-v7a/libTeamTalk5.so output_v7/libs/ || true
           
-          # کپی هدرهای خود تیم‌تاک با حفظ ساختار
-          find Library/ -name "*.h" -exec cp --parents {} output_v7/headers/ \; || true
+          cp -r Build/build-release-android-armeabi-v7a/install output_v7/ || true
           
-          # تمام فایل‌های .a و هدرهای پیش‌نیاز توسط خود بیلد در پوشه install 
-          # به صورت کاملا مرتب و آماده برای استفاده آفلاین قرار می‌گیرند.
-          cp -r build-release-android-armeabi-v7a/install output_v7/Prebuilt_Toolchain || true
+          find Library/ -name "*.h" -exec cp --parents {} output_v7/headers/ \; || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
