@@ -1,4 +1,4 @@
-name: Android
+name: Android v7
 
 on:
   push:
@@ -41,24 +41,24 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: build_sdk
+      - name: build_sdk_v7
         working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-armeabi-v7a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: export_artifacts
         if: always()
         run: |
-          mkdir -p output/libs
-          mkdir -p output/headers
-          cp -r Library/TeamTalk_DLL/arm64-v8a/*.so output/libs/ || true
-          find Build/build-release-android-arm64-v8a/ -name "*.a" -exec cp {} output/libs/ \; || true
-          find Library/ -name "*.h" -exec cp --parents {} output/headers/ \; || true
+          mkdir -p output_v7/libs
+          mkdir -p output_v7/headers
+          cp -r Library/TeamTalk_DLL/armeabi-v7a/*.so output_v7/libs/ || true
+          find Build/build-release-android-armeabi-v7a/ -name "*.a" -exec cp {} output_v7/libs/ \; || true
+          find Library/ -name "*.h" -exec cp --parents {} output_v7/headers/ \; || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
         with:
-          name: TeamTalk-ARM64-SDK
-          path: output/
+          name: TeamTalk-v7-SDK
+          path: output_v7/
