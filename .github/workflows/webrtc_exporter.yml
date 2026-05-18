@@ -1,68 +1,84 @@
-name: WebRTC Multi-Arch Exporter
+name: WebRTC Nuclear Standalone Build (ARM64)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # اجرای دستی از تب Actions
 
 jobs:
-  export_webrtc:
-    name: Build WebRTC for ${{ matrix.abi }}
+  build_webrtc:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false # بسیار مهم: اگر یکی شکست خورد، آن یکی را کنسل نکن
-      matrix:
-        include:
-          - abi: "armeabi-v7a"
-            make_cmd: "android-armeabi-v7a"
-          - abi: "arm64-v8a"
-            make_cmd: "android-arm64-v8a"
-
+    name: Build WebRTC v8a
     steps:
-      - name: Maximize Disk Space (Aggressive)
+      - name: ☢️ Aggressive Disk Cleanup
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
+          echo "Space before cleanup:"
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/powershell /usr/share/swift /usr/local/lib/node_modules
           sudo docker image prune --all --force
           sudo apt-get clean
+          echo "Space after cleanup:"
           df -h
 
-      - name: Checkout
+      - name: Checkout TeamTalk (Private Repo)
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure Git
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Set up NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r26b
-
-      - name: Install Dependencies
+      - name: Install Build Tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full wget
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full wget python3 python-is-python3
 
-      - name: Build WebRTC Only
-        working-directory: ${{github.workspace}}/Build
+      - name: Setup Depot Tools
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" ${{ matrix.make_cmd }}
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$(pwd)/depot_tools" >> $GITHUB_PATH
 
-      - name: Prepare Artifacts
-        if: always() # حتی اگر مراحل قبل خطا داشت، سعی کن فایل‌های ساخته شده را برداری
+      - name: 📥 Fetch WebRTC Source
         run: |
-          mkdir -p output/${{ matrix.abi }}/lib
-          # تلاش برای کپی کردن؛ اگر فایل نبود خطا ندهد
-          cp -r Build/build-release-android-${{ matrix.abi }}/webrtc/include output/${{ matrix.abi }}/ || true
-          cp Build/build-release-android-${{ matrix.abi }}/webrtc/obj/modules/audio_processing/libteamtalk.a output/${{ matrix.abi }}/lib/ || true
+          mkdir -p ~/webrtc_standalone
+          cd ~/webrtc_standalone
+          export PATH=$PATH:$(pwd)/../depot_tools
+          # دانلود سورس اندروید (فقط شاخه مورد نیاز برای صرفه‌جویی در فضا)
+          fetch --nohooks webrtc_android
+          cd src
+          git checkout branch-heads/6818
+          gclient sync -D --force --reset --nohooks
+          echo "Disk space after fetch:"
+          df -h
+
+      - name: 🛠️ Apply libteamtalk Patch
+        run: |
+          cd ~/webrtc_standalone/src
+          # اعمال پچی که در مسیر پروژه خصوصی شما قرار دارد
+          git apply ${{ github.workspace }}/Library/TeamTalkLib/build/webrtc/libteamtalk-r6818.patch
+          echo "Patch applied successfully."
+
+      - name: 🏗️ GN Gen & Ninja Build (ARM64)
+        run: |
+          cd ~/webrtc_standalone/src
+          export PATH=$PATH:$(pwd)/../depot_tools
+          # تنظیمات فوق بهینه برای بیلد تک معماری و کوچک
+          gn gen out/Release "--args=target_os=\"android\" target_cpu=\"arm64\" is_debug=false rtc_include_tests=false rtc_build_examples=false rtc_use_h264=false is_component_build=false"
+          # ساخت هدف اختصاصی teamtalk که در پچ اضافه شده
+          ninja -v -C out/Release teamtalk
+          echo "Build finished. Final disk check:"
+          df -h
+
+      - name: 📦 Export Artifacts
+        run: |
+          mkdir -p ${{ github.workspace }}/webrtc_final/lib
+          mkdir -p ${{ github.workspace }}/webrtc_final/include
+          
+          # کپی فایل استاتیک نهایی (تک فایل)
+          cp ~/webrtc_standalone/src/out/Release/obj/modules/audio_processing/libteamtalk.a ${{ github.workspace }}/webrtc_final/lib/
+          
+          # کپی هدر فایل‌ها (فقط فایل‌های .h مورد نیاز)
+          cd ~/webrtc_standalone/src
+          find . -name "*.h" -exec cp --parents {} ${{ github.workspace }}/webrtc_final/include/ \; || true
 
       - name: Upload Pre-built WebRTC
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: webrtc-prebuilt-${{ matrix.abi }}
-          path: output/${{ matrix.abi }}/
+          name: webrtc-android-arm64-v8a-complete
+          path: ${{ github.workspace }}/webrtc_final/
