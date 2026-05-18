@@ -2193,7 +2193,7 @@ TEAMTALKDLL_API TTBOOL TT_StartStreamingMediaFileToChannelEx(IN TTInstance* lpTT
         Convert(*lpVideoCodec, vid_codec);
 
     return static_cast<TTBOOL>(clientnode->StartStreamingMediaFile(szMediaFilePath, lpMediaFilePlayback->uOffsetMSec,
-                                               lpMediaFilePlayback->bPaused != 0, preprocessor, vid_codec));
+                                               lpMediaFilePlayback->bPaused != 0, preprocessor, vid_codec, lpMediaFilePlayback->fPlaybackSpeed));
 }
 
 TEAMTALKDLL_API TTBOOL TT_UpdateStreamingMediaFileToChannel(IN TTInstance* lpTTInstance,

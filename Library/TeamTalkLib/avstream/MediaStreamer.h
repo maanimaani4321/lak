@@ -65,6 +65,7 @@ struct MediaStreamOutput : public MediaStream
     // and therefore set as const
     int audio_samples = 0;
     uint32_t audio_duration_ms = 0;
+    float speed = 1.0f;
     MediaStreamOutput() = default;
 
     MediaStreamOutput(const media::AudioFormat& afmt, int audio_samples) : audio_samples(audio_samples) { audio = afmt; }

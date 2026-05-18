@@ -83,6 +83,7 @@ struct AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
                                              AVFilterContext*& aud_buffersrc_ctx,
                                              int audio_stream_index,
                                              int out_channels,
-                                             int out_samplerate);
+                                             int out_samplerate,
+                                             float speed);
 
 #endif

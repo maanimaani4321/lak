@@ -3212,7 +3212,8 @@ bool ClientNode::StartMTUQuery()
 bool ClientNode::StartStreamingMediaFile(const ACE_TString& filename,
                                          uint32_t offset, bool paused,
                                          const AudioPreprocessor& preprocessor,
-                                         const VideoCodec& vid_codec)
+                                         const VideoCodec& vid_codec,
+                                         float speed)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
 
@@ -3230,6 +3231,7 @@ bool ClientNode::StartStreamingMediaFile(const ACE_TString& filename,
 
     MediaStreamOutput media_out(GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec()),
                                 GetAudioCodecCbSamples(m_mychannel->GetAudioCodec()));
+                                media_out.speed = speed;
     bool const videooutput = vid_codec.codec != CODEC_NO_CODEC;
     if (videooutput)
     {

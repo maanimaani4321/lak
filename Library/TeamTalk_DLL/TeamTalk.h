@@ -1575,6 +1575,7 @@ extern "C" {
         TTBOOL bPaused;
         /** @brief Option to activate audio preprocessor on local media file playback. */
         AudioPreprocessor audioPreprocessor;
+        float fPlaybackSpeed;
     } MediaFilePlayback;
 
     /** @brief The progress of the audio currently being processed as
