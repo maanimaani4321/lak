@@ -1,0 +1,95 @@
+name: TeamTalk Full Android SDK Build (ARM64)
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch: # امکان اجرای دستی
+
+jobs:
+  build_everything:
+    runs-on: ubuntu-24.04
+    name: Build ACE, WebRTC, and TT Core
+    permissions:
+      contents: write
+
+    steps:
+      - name: ☢️ Nuclear Disk Cleanup (To keep 140GB+)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/powershell /usr/share/swift
+          sudo docker image prune --all --force
+          sudo apt-get clean
+          df -h
+
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b # نسخه‌ای که با WebRTC 6818 هماهنگی بهتری دارد
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full wget python3 python-is-python3
+
+      - name: Setup Depot Tools (For WebRTC)
+        run: |
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo "$(pwd)/depot_tools" >> $GITHUB_PATH
+
+      - name: 🛠️ Fix WebRTC Clang Mismatch
+        # این مرحله مشکل Clang version 20 vs 23 را قبل از بیلد حل می‌کند
+        run: |
+          # مسیر سورس وب آر تی سی را پیدا کرده و اسکریپت آپدیت کلنگ را اجرا میکنیم
+          # این مسیر بعد از اجرای اولین دستور make ساخته میشود، پس ما قبل از بیلد اصلی یک بار پیش‌نیازها را لود میکنیم
+          echo "Preparing WebRTC environment..."
+          mkdir -p ~/webrtc/Android/src
+          # ایجاد لینک برای استفاده در Makefile
+          ln -s ~/webrtc/Android/src ${{ github.workspace }}/Library/TeamTalkLib/webrtc/src || true
+
+      - name: 🏗️ Build All (ACE, WebRTC, TT Core) - ARM64
+        working-directory: ${{github.workspace}}/Build
+        run: |
+          # ۱. نصب پیش‌نیازهای نرم‌افزاری
+          sudo make depend-ubuntu24-android
+          
+          # ۲. اجرای بیلد اصلی فقط برای ARM64 با WebRTC روشن
+          # ما از -j2 استفاده میکنیم تا رم ۷ گیگابایتی پر نشود
+          make -j2 CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          PATH: ${{ github.workspace }}/depot_tools:${{ env.PATH }}
+
+      - name: 📦 Collect and Export All Artifacts (.a, .so, .h)
+        if: always() # حتی اگر بخشی خطا داشت فایل‌های بقیه را بردار
+        run: |
+          mkdir -p export/final_so
+          mkdir -p export/static_libs
+          mkdir -p export/headers
+
+          # ۱. کپی فایل‌های .so نهایی (این چیزی است که در اندروید استودیو نیاز داری)
+          cp -r ${{ github.workspace }}/Library/TeamTalk_DLL/arm64-v8a/*.so export/final_so/ || true
+          
+          # ۲. کپی تمام کتابخانه‌های استاتیک ساخته شده (.a) مثل ACE, WebRTC, OpenSSL
+          # این فایل‌ها در پوشه install ساخته شده توسط Makefile هستند
+          find Build/build-release-android-arm64-v8a/ -name "*.a" -exec cp {} export/static_libs/ \; || true
+          
+          # ۳. کپی تمام اینکلودها و هدر فایل‌ها
+          find Library/ -name "*.h" -exec cp --parents {} export/headers/ \; || true
+          find Build/build-release-android-arm64-v8a/ -name "*.h" -exec cp --parents {} export/headers/ \; || true
+
+      - name: Upload Everything
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeamTalk-Full-SDK-ARM64
+          path: export/
