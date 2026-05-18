@@ -42,28 +42,28 @@ jobs:
           ndk-version: r26b
 
       - name: build_sdk_v7
-        working-directory: ${{github.workspace}}
+        working-directory: ${{github.workspace}}/build
         run: |
-          # تغییر نام فایل Makefile.txt به Makefile در صورت نیاز
-          if [ -f "Makefile.txt" ]; then mv Makefile.txt Makefile; fi
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" android-armeabi-v7a
+          # با افزودن فلگ‌های LIBPRO=OFF نسخه پرو بیلد نمی‌شود
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DBUILD_TEAMTALK_LIBRARY_LIBPRO=OFF -DBUILD_TEAMTALK_LIBRARY_DLLPRO=OFF" android-armeabi-v7a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: export_artifacts
         if: always()
+        working-directory: ${{github.workspace}}
         run: |
           mkdir -p output_v7/TeamTalk_Binaries
           mkdir -p output_v7/TeamTalk_Headers
           
-          # 1. کپی فایل‌های .so خود تیم‌تاک
-          cp -r Library/TeamTalk_DLL/armeabi-v7a/*.so output_v7/TeamTalk_Binaries/ || true
+          # فقط نسخه استاندارد کپی می‌شود
+          cp Library/TeamTalk_DLL/armeabi-v7a/libTeamTalk5.so output_v7/TeamTalk_Binaries/ || true
           
-          # 2. کپی هدرهای خود تیم‌تاک (با حفظ ساختار پوشه Library)
+          # کپی هدرها با حفظ ساختار
           find Library/ -name "*.h" -print0 | xargs -0 -I {} cp --parents {} output_v7/TeamTalk_Headers/ || true
           
-          # 3. کپی کل پوشه پیش‌نیازهای بیلد شده (بسیار مهم برای بیلد آفلاین)
-          cp -r build-release-android-armeabi-v7a/install output_v7/Prebuilt_Toolchain || true
+          # کپی پوشه install پیش‌نیازها که برای بیلد آفلاین حیاتی است
+          cp -r build/build-release-android-armeabi-v7a/install output_v7/Prebuilt_Toolchain || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
