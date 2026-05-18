@@ -18,6 +18,9 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v6
+      with:
+        submodules: 'recursive' # اگر زیرمجموعه‌ای وجود دارد دانلود شود
+        persist-credentials: true # این خط باعث می‌شود دسترسی برای مراحل بعدی (مثل ساخت .so) باقی بماند
 
     - name: Set up Java
       uses: actions/setup-java@v5
