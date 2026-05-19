@@ -4388,3 +4388,19 @@ TEAMTALKDLL_API TTBOOL TT_Firewall_RemoveAppException(IN const TTCHAR* szExecuta
 
 #endif /* WIN32 */
 
+TEAMTALKDLL_API TTBOOL TT_SetSoundInputFilter(IN TTInstance* lpTTInstance,
+                                              IN const TTCHAR* szFilter)
+{
+    clientnode_t clientnode;
+    GET_CLIENTNODE_RET(clientnode, lpTTInstance, FALSE);
+
+    if (szFilter == nullptr)
+        return FALSE;
+
+#if defined(UNICODE)
+    ACE_CString filter_utf8 = UnicodeToUtf8(szFilter);
+    return static_cast<TTBOOL>(clientnode->SetSoundInputFilter(filter_utf8.c_str()));
+#else
+    return static_cast<TTBOOL>(clientnode->SetSoundInputFilter(szFilter));
+#endif
+}

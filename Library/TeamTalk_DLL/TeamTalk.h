@@ -4736,6 +4736,7 @@ extern "C" {
      * @return A value from #SOUND_GAIN_MIN to #SOUND_GAIN_MAX.
      * @see TT_SetSoundInputGainLevel */
     TEAMTALKDLL_API INT32 TT_GetSoundInputGainLevel(IN TTInstance* lpTTInstance);
+    TEAMTALKDLL_API TTBOOL TT_SetSoundInputFilter(IN TTInstance* lpTTInstance, IN const TTCHAR* szFilter);
 
     /**
      * @brief Enable sound preprocessor which should be used for

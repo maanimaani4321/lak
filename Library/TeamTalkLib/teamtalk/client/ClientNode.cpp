@@ -3130,6 +3130,13 @@ int ClientNode::GetVoiceGainLevel()
     return m_voice_thread.m_gainlevel;
 }
 
+bool ClientNode::SetSoundInputFilter(const ACE_CString& filter_str)
+{
+    rguard_t const g_snd(LockSndprop());
+    m_voice_thread.SetFFmpegFilter(filter_str);
+    return true;
+}
+
 bool ClientNode::SetSoundPreprocess(const AudioPreprocessor& preprocessor)
 {
     rguard_t const g_snd(LockSndprop());
