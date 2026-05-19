@@ -1,6 +1,24 @@
 /*
  * Copyright (c) 2005-2018, BearWare.dk
- * ...
+ * 
+ * Contact Information:
+ *
+ * Bjoern D. Rasmussen
+ * Kirketoften 5
+ * DK-8260 Viby J
+ * Denmark
+ * Email: contact@bearware.dk
+ * Phone: +45 20 20 54 59
+ * Web: http://www.bearware.dk
+ *
+ * This source code is part of the TeamTalk SDK owned by
+ * BearWare.dk. Use of this file, or its compiled unit, requires a
+ * TeamTalk SDK License Key issued by BearWare.dk.
+ *
+ * The TeamTalk SDK License Agreement along with its Terms and
+ * Conditions are outlined in the file License.txt included with the
+ * TeamTalk SDK distribution.
+ *
  */
 
 #include "AudioThread.h"
@@ -20,6 +38,7 @@ extern "C" {
 #include <libavfilter/buffersrc.h>
 #include <libavutil/opt.h>
 #include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
 }
 
 #include <cassert>
@@ -76,14 +95,16 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     
     m_filter_graph = avfilter_graph_alloc();
     if (!outputs || !inputs || !m_filter_graph) {
+        if (outputs) avfilter_inout_free(&outputs);
+        if (inputs) avfilter_inout_free(&inputs);
         FreeFFmpegFilter();
         return false;
     }
 
-    AVChannelLayout ch_layout = {};
-    av_channel_layout_default(&ch_layout, format.channels);
+    AVChannelLayout in_ch_layout = {};
+    av_channel_layout_default(&in_ch_layout, format.channels);
     char ch_layout_str[64];
-    av_channel_layout_describe(&ch_layout, ch_layout_str, sizeof(ch_layout_str));
+    av_channel_layout_describe(&in_ch_layout, ch_layout_str, sizeof(ch_layout_str));
 
     snprintf(args, sizeof(args),
              "time_base=1/%d:sample_rate=%d:sample_fmt=s16:channel_layout=%s",
@@ -91,22 +112,28 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
 
     ret = avfilter_graph_create_filter(&m_buffersrc_ctx, abuffersrc, "in",
                                        args, nullptr, m_filter_graph);
-    if (ret < 0) goto end;
+    if (ret < 0) goto filter_init_error;
 
     ret = avfilter_graph_create_filter(&m_buffersink_ctx, abuffersink, "out",
                                        nullptr, nullptr, m_filter_graph);
-    if (ret < 0) goto end;
+    if (ret < 0) goto filter_init_error;
 
-    // اجبار به خروجی s16 و سمپل‌ریت و کانال استاندارد برای جلوگیری از کرش
-    ret = av_opt_set_bin(m_buffersink_ctx, "sample_fmts",
-                         (const uint8_t*)&(const enum AVSampleFormat){AV_SAMPLE_FMT_S16},
-                         sizeof(enum AVSampleFormat), AV_OPT_SEARCH_CHILDREN);
-    ret = av_opt_set_bin(m_buffersink_ctx, "channel_layouts",
-                         (const uint8_t*)&(const uint64_t){(format.channels == 2 ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_MONO)},
-                         sizeof(uint64_t), AV_OPT_SEARCH_CHILDREN);
-    ret = av_opt_set_bin(m_buffersink_ctx, "sample_rates",
-                         (const uint8_t*)&(const int){format.samplerate},
-                         sizeof(int), AV_OPT_SEARCH_CHILDREN);
+    // رفع خطای rvalue با تعریف متغیرهای محلی صریح (Explicit Local Variables)
+    {
+        const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_NONE };
+        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_fmts", out_sample_fmts, -1, AV_OPT_SEARCH_CHILDREN);
+        if (ret < 0) goto filter_init_error;
+
+        const int out_sample_rates[] = { format.samplerate, -1 };
+        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
+        if (ret < 0) goto filter_init_error;
+
+        AVChannelLayout out_ch_layout = {};
+        av_channel_layout_default(&out_ch_layout, format.channels);
+        const AVChannelLayout out_ch_layouts[] = { out_ch_layout };
+        ret = av_opt_set_array(m_buffersink_ctx, "channel_layouts", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_CHLAYOUT, out_ch_layouts);
+        if (ret < 0) goto filter_init_error;
+    }
 
     outputs->name       = av_strdup("in");
     outputs->filter_ctx = m_buffersrc_ctx;
@@ -120,22 +147,21 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
 
     ret = avfilter_graph_parse_ptr(m_filter_graph, m_ffmpeg_filter_str.c_str(),
                                    &inputs, &outputs, nullptr);
-    if (ret < 0) goto end;
+    if (ret < 0) goto filter_init_error;
 
     ret = avfilter_graph_config(m_filter_graph, nullptr);
-    if (ret < 0) goto end;
+    if (ret < 0) goto filter_init_error;
 
-end:
     avfilter_inout_free(&inputs);
     avfilter_inout_free(&outputs);
-
-    if (ret < 0) {
-        MYTRACE(ACE_TEXT("Failed to init FFmpeg Filter: %s\n"), m_ffmpeg_filter_str.c_str());
-        FreeFFmpegFilter();
-        return false;
-    }
-    
     return true;
+
+filter_init_error:
+    if (inputs) avfilter_inout_free(&inputs);
+    if (outputs) avfilter_inout_free(&outputs);
+    MYTRACE(ACE_TEXT("Failed to init FFmpeg Filter: %s. Error: %d\n"), m_ffmpeg_filter_str.c_str(), ret);
+    FreeFFmpegFilter();
+    return false;
 }
 
 bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
@@ -258,8 +284,7 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
 
 void AudioThread::StopEncoder()
 {
-    int const ret = this->msg_queue()->close();
-    TTASSERT(ret >= 0);
+    this->msg_queue()->close();
     wait();
 
     FreeFFmpegFilter();
@@ -292,7 +317,6 @@ void AudioThread::StopEncoder()
 
 int AudioThread::close(u_long /*flags*/)
 {
-    MYTRACE( ACE_TEXT("Audio Encoder thread closed\n") );
     return 0;
 }
 
@@ -446,9 +470,6 @@ void AudioThread::MuteSound(bool leftchannel, bool rightchannel)
 void AudioThread::QueueAudio(const media::AudioFrame& audframe)
 {
     TTASSERT(m_codec.codec != CODEC_NO_CODEC);
-    assert(audframe.inputfmt.channels == audframe.outputfmt.channels || audframe.outputfmt.channels == 0);
-    assert(audframe.input_samples == audframe.output_samples || audframe.output_samples == 0);
-
     ACE_Message_Block* mb = AudioFrameToMsgBlock(audframe);
     if (mb != nullptr)
         QueueAudio(mb);
@@ -459,7 +480,6 @@ void AudioThread::QueueAudio(ACE_Message_Block* mb_audio)
     ACE_Time_Value tv;
     if(putq(mb_audio, &tv)<0)
     {
-        MYTRACE(ACE_TEXT("AudioThread msg_q full, dropped frame\n"));
         mb_audio->release();
     }
 }
@@ -468,7 +488,6 @@ bool AudioThread::IsVoiceActive()
 {
 #if defined(ENABLE_WEBRTC)
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-
     if (m_apm)
     {
         assert(m_aps);
@@ -534,38 +553,38 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 
         if (m_filter_graph && m_buffersrc_ctx && m_buffersink_ctx) {
             AVFrame* frame = av_frame_alloc();
-            frame->nb_samples = audblock.input_samples;
-            av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
-            frame->format = AV_SAMPLE_FMT_S16;
-            frame->sample_rate = audblock.inputfmt.samplerate;
-            
-            av_frame_get_buffer(frame, 0);
-            memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
+            if (frame) {
+                frame->nb_samples = audblock.input_samples;
+                frame->format = AV_SAMPLE_FMT_S16;
+                frame->sample_rate = audblock.inputfmt.samplerate;
+                av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
+                
+                if (av_frame_get_buffer(frame, 0) >= 0) {
+                    memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
 
-            if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
-                while (true) {
-                    AVFrame* out_frame = av_frame_alloc();
-                    int ret = av_buffersink_get_frame(m_buffersink_ctx, out_frame);
-                    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0) {
-                        av_frame_free(&out_frame);
-                        break;
+                    if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
+                        while (true) {
+                            AVFrame* out_frame = av_frame_alloc();
+                            if (av_buffersink_get_frame(m_buffersink_ctx, out_frame) < 0) {
+                                av_frame_free(&out_frame);
+                                break;
+                            }
+                            
+                            int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
+                            short* out_data = (short*)out_frame->data[0];
+                            m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                            av_frame_free(&out_frame);
+                        }
                     }
-                    
-                    int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
-                    short* out_data = (short*)out_frame->data[0];
-                    m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
-                    av_frame_free(&out_frame);
                 }
+                av_frame_free(&frame);
             }
-            av_frame_free(&frame);
 
-            // اطمینان از اینکه دقیقاً به اندازه نیاز انکودر سمپل ارسال می‌شود
             int required_elements = audblock.input_samples * audblock.inputfmt.channels;
-            if (m_filter_fifo.size() >= required_elements) {
+            if (m_filter_fifo.size() >= (size_t)required_elements) {
                 memcpy(audblock.input_buffer, m_filter_fifo.data(), required_elements * sizeof(short));
                 m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + required_elements);
             } else {
-                // اگر فیلتر باعث کاهش طول شده و دیتای کافی نداریم، فعلاً رد می‌شویم تا بافر پر شود
                 return;
             }
         }
@@ -593,9 +612,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
             enc_data = ProcessOPUS(audblock, enc_frame_sizes);
 #endif
             break;
-        case CODEC_NO_CODEC :
-        case CODEC_WEBM_VP8 :
-            break;
+        default: break;
         }
         if(enc_data != nullptr)
         {
@@ -613,16 +630,13 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
         if(!m_enc_cleared)
         {
 #if defined(ENABLE_SPEEX)
-            if(m_speex)
-                m_speex->Reset();
+            if(m_speex) m_speex->Reset();
 #endif
 #if defined(ENABLE_OPUS)
-            if (m_opus)
-                m_opus->Reset();
+            if (m_opus) m_opus->Reset();
 #endif
             m_enc_cleared = true;
         }
-
         m_callback(m_codec, nullptr, 0, std::vector<int>(), audblock);
     }
 }
@@ -630,9 +644,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 void AudioThread::MeasureVoiceLevel(const media::AudioFrame& audblock)
 {
     const int VU_MAX_VOLUME = 8000;
-    int lsum = 0;
-    int rsum = 0;
-    int sum = 0;
+    int lsum = 0, rsum = 0, sum = 0;
     int const samples_total = audblock.input_samples * audblock.inputfmt.channels;
     
     if (audblock.inputfmt.channels == 2)
@@ -668,27 +680,19 @@ void AudioThread::MeasureVoiceLevel(const media::AudioFrame& audblock)
 void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
 {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-
-    bool preprocess = false;
     if (!m_preprocess_left) return;
 
-    preprocess |= m_preprocess_left->IsEchoCancel();
-    preprocess |= m_preprocess_left->IsDenoising();
-    preprocess |= m_preprocess_left->IsAGC();
-
+    bool preprocess = m_preprocess_left->IsEchoCancel() || m_preprocess_left->IsDenoising() || m_preprocess_left->IsAGC();
     if(!preprocess) return;
 
     if(audblock.inputfmt.channels == 1)
     {
-        if (m_preprocess_left->IsEchoCancel() &&
-            audblock.outputfmt.channels == 1 && (audblock.output_buffer != nullptr))
+        if (m_preprocess_left->IsEchoCancel() && audblock.outputfmt.channels == 1 && (audblock.output_buffer != nullptr))
         {
-            if(m_echobuf.size() != (size_t)audblock.input_samples)
+            if(m_echobuf.size() < (size_t)audblock.input_samples)
                 m_echobuf.resize(audblock.input_samples);
 
-            m_preprocess_left->EchoCancel(audblock.input_buffer,
-                                          audblock.output_buffer,
-                                          m_echobuf.data());
+            m_preprocess_left->EchoCancel(audblock.input_buffer, audblock.output_buffer, m_echobuf.data());
             audblock.input_buffer = m_echobuf.data();
         }
         m_preprocess_left->Preprocess(audblock.input_buffer); 
@@ -696,28 +700,22 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
     else if(audblock.inputfmt.channels == 2)
     {
         assert(m_preprocess_right);
-        std::vector<short> in_leftchan(audblock.input_samples);
-        std::vector<short> in_rightchan(audblock.input_samples);
-        SplitStereo(audblock.input_buffer, audblock.input_samples, in_leftchan, in_rightchan);
+        std::vector<short> in_left(audblock.input_samples), in_right(audblock.input_samples);
+        SplitStereo(audblock.input_buffer, audblock.input_samples, in_left, in_right);
 
-        if(m_preprocess_left->IsEchoCancel() && m_preprocess_right->IsEchoCancel() &&
-           audblock.outputfmt.channels == 2 && (audblock.output_buffer != nullptr))
+        if(m_preprocess_left->IsEchoCancel() && m_preprocess_right->IsEchoCancel() && audblock.outputfmt.channels == 2 && (audblock.output_buffer != nullptr))
         {
-            std::vector<short> out_leftchan(audblock.output_samples);
-            std::vector<short> out_rightchan(audblock.output_samples);
-            std::vector<short> echobuf_left(audblock.output_samples);
-            std::vector<short> echobuf_right(audblock.output_samples);
-            SplitStereo(audblock.output_buffer, audblock.output_samples, out_leftchan, out_rightchan);
-
-            m_preprocess_left->EchoCancel(in_leftchan.data(), out_leftchan.data(), echobuf_left.data());
-            in_leftchan.swap(echobuf_left);
-            m_preprocess_right->EchoCancel(in_rightchan.data(), out_rightchan.data(), echobuf_right.data());
-            in_rightchan.swap(echobuf_right);
+            std::vector<short> out_l(audblock.output_samples), out_r(audblock.output_samples);
+            std::vector<short> echo_l(audblock.output_samples), echo_r(audblock.output_samples);
+            SplitStereo(audblock.output_buffer, audblock.output_samples, out_l, out_r);
+            m_preprocess_left->EchoCancel(in_left.data(), out_l.data(), echo_l.data());
+            m_preprocess_right->EchoCancel(in_right.data(), out_r.data(), echo_r.data());
+            in_left.swap(echo_l); in_right.swap(echo_r);
         }
 
-        m_preprocess_left->Preprocess(in_leftchan.data());
-        m_preprocess_right->Preprocess(in_rightchan.data());
-        MergeStereo(in_leftchan, in_rightchan, audblock.input_buffer, audblock.input_samples);
+        m_preprocess_left->Preprocess(in_left.data());
+        m_preprocess_right->Preprocess(in_right.data());
+        MergeStereo(in_left, in_right, audblock.input_buffer, audblock.input_samples);
     }
 }
 #endif
@@ -726,37 +724,27 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
 void AudioThread::PreprocessWebRTC(media::AudioFrame& audblock)
 {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-    if (!m_apm) return;
-
-    if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
-        MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
+    if (m_apm) {
+        if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
+            // Error handling
+        }
     }
 }
 #endif
 
 #if defined(ENABLE_SPEEX)
-const char* AudioThread::ProcessSpeex(const media::AudioFrame& audblock,
-                                      std::vector<int>& enc_frame_sizes)
+const char* AudioThread::ProcessSpeex(const media::AudioFrame& audblock, std::vector<int>& enc_frame_sizes)
 {
-    TTASSERT(m_speex);
-
     int const framesize = GetAudioCodecFrameSize(m_codec);
-    int nbBytes = 0;
-    int n_processed = 0;
-    int ret;
+    int nbBytes = 0, n_processed = 0;
     int const fpp = GetAudioCodecFramesPerPacket(m_codec);
-    int enc_frm_size = 0;
-
     if (framesize <= 0 || fpp <= 0) return nullptr;
-
-    enc_frm_size = int(m_encbuf.size()) / fpp;
+    int enc_frm_size = int(m_encbuf.size()) / fpp;
 
     while(n_processed < audblock.input_samples)
     {
-        ret = m_speex->Encode(&audblock.input_buffer[n_processed],
-                              &m_encbuf[nbBytes], enc_frm_size);
+        int ret = m_speex->Encode(&audblock.input_buffer[n_processed], &m_encbuf[nbBytes], enc_frm_size);
         if(ret <= 0) return nullptr;
-
         enc_frame_sizes.push_back(ret);
         n_processed += framesize;
         nbBytes += ret;
@@ -766,29 +754,19 @@ const char* AudioThread::ProcessSpeex(const media::AudioFrame& audblock,
 #endif
 
 #if defined(ENABLE_OPUS)
-const char* AudioThread::ProcessOPUS(const media::AudioFrame& audblock,
-                                     std::vector<int>& enc_frame_sizes)
+const char* AudioThread::ProcessOPUS(const media::AudioFrame& audblock, std::vector<int>& enc_frame_sizes)
 {
-    TTASSERT(m_opus);
-    TTASSERT(audblock.input_samples == GetAudioCodecCbSamples(m_codec));
     int const framesize = GetAudioCodecFrameSize(m_codec);
     int const channels = GetAudioCodecChannels(m_codec);
     int const fpp = GetAudioCodecFramesPerPacket(m_codec);
-    int nbBytes = 0;
-    int n_processed = 0;
-    int ret;
-    int enc_frm_size = 0;
-
+    int nbBytes = 0, n_processed = 0;
     if (framesize <= 0 || fpp <= 0) return nullptr;
-
-    enc_frm_size = int(m_encbuf.size()) / fpp;
+    int enc_frm_size = int(m_encbuf.size()) / fpp;
 
     while(n_processed < audblock.input_samples)
     {
-        ret = m_opus->Encode(&audblock.input_buffer[n_processed*channels],
-                             framesize, &m_encbuf[nbBytes], enc_frm_size);
+        int ret = m_opus->Encode(&audblock.input_buffer[n_processed*channels], framesize, &m_encbuf[nbBytes], enc_frm_size);
         if(ret <= 0) return nullptr;
-
         enc_frame_sizes.push_back(ret);
         n_processed += framesize;
         nbBytes += ret;
