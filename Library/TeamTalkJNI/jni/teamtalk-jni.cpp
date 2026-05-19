@@ -1952,7 +1952,7 @@ extern "C" {
 
 //TODO: TT_HotKey_*
 
-    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setSoundInputFilter(JNIEnv* env,
+JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setSoundInputFilter(JNIEnv* env,
                                                                                 jobject thiz,
                                                                                 jstring filter)
     {
@@ -1961,11 +1961,9 @@ extern "C" {
             return JNI_FALSE;
 
         if (filter == NULL)
-            return TT_SetSoundInputFilter(ttInst, ACE_TEXT(""));
+            return TT_SetSoundInputFilter(ttInst, "");
 
-        ttstr tt_filter(env, filter); 
-        
-        return TT_SetSoundInputFilter(ttInst, tt_filter.c_str());
+        return TT_SetSoundInputFilter(ttInst, ttstr(env, filter));
     }
 
 } //extern "C"
