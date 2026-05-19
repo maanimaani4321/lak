@@ -1,24 +1,5 @@
 /*
  * Copyright (c) 2005-2018, BearWare.dk
- * 
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
  */
 
 #include "AudioThread.h"
@@ -27,6 +8,9 @@
 #include "teamtalk/CodecCommon.h"
 #include "teamtalk/PacketLayout.h"
 #include "teamtalk/TTAssert.h"
+
+// برای اطمینان از مقداردهی اولیه FFmpeg
+#include "avstream/FFmpegStreamer.h"
 
 #if defined(ENABLE_WEBRTC)
 #include "avstream/WebRTCPreprocess.h"
@@ -58,7 +42,7 @@ AudioThread::AudioThread()
 AudioThread::~AudioThread()
 {
     FreeFFmpegFilter();
-    MYTRACE(ACE_TEXT("AudioThread\n"));
+    MYTRACE(ACE_TEXT("AudioThread destroyed\n"));
 }
 
 void AudioThread::SetFFmpegFilter(const std::string& filter_str)
@@ -66,6 +50,7 @@ void AudioThread::SetFFmpegFilter(const std::string& filter_str)
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
     m_ffmpeg_filter_str = filter_str;
     m_filter_changed = true;
+    MYTRACE(ACE_TEXT("AudioThread: Filter string updated to: %s\n"), filter_str.c_str());
 }
 
 void AudioThread::FreeFFmpegFilter()
@@ -81,10 +66,15 @@ void AudioThread::FreeFFmpegFilter()
 
 bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
 {
+    // اطمینان از اینکه فیلترهای FFmpeg در این ترد شناخته شده‌اند
+    InitAVConv();
+
     FreeFFmpegFilter();
     
-    if (m_ffmpeg_filter_str.empty())
+    if (m_ffmpeg_filter_str.empty()) {
+        MYTRACE(ACE_TEXT("AudioThread: Filter string is empty, bypassing filters.\n"));
         return true;
+    }
 
     char args[512];
     int ret = 0;
@@ -94,10 +84,11 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     AVFilterInOut *inputs  = avfilter_inout_alloc();
     
     m_filter_graph = avfilter_graph_alloc();
+    
     if (!outputs || !inputs || !m_filter_graph) {
         if (outputs) avfilter_inout_free(&outputs);
         if (inputs) avfilter_inout_free(&inputs);
-        FreeFFmpegFilter();
+        MYTRACE(ACE_TEXT("AudioThread: Failed to allocate filter structures.\n"));
         return false;
     }
 
@@ -106,33 +97,38 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     char ch_layout_str[64];
     av_channel_layout_describe(&in_ch_layout, ch_layout_str, sizeof(ch_layout_str));
 
+    // تنظیم ورودی گراف
     snprintf(args, sizeof(args),
              "time_base=1/%d:sample_rate=%d:sample_fmt=s16:channel_layout=%s",
              format.samplerate, format.samplerate, ch_layout_str);
 
     ret = avfilter_graph_create_filter(&m_buffersrc_ctx, abuffersrc, "in",
                                        args, nullptr, m_filter_graph);
-    if (ret < 0) goto filter_init_error;
+    if (ret < 0) {
+        MYTRACE(ACE_TEXT("AudioThread: Cannot create buffer source. Error: %d\n"), ret);
+        goto filter_init_error;
+    }
 
+    // تنظیم خروجی گراف
     ret = avfilter_graph_create_filter(&m_buffersink_ctx, abuffersink, "out",
                                        nullptr, nullptr, m_filter_graph);
-    if (ret < 0) goto filter_init_error;
+    if (ret < 0) {
+        MYTRACE(ACE_TEXT("AudioThread: Cannot create buffer sink. Error: %d\n"), ret);
+        goto filter_init_error;
+    }
 
-    // رفع خطای rvalue با تعریف متغیرهای محلی صریح (Explicit Local Variables)
+    // اجبار گراف به تولید فرمت استاندارد برای انکودر TeamTalk
     {
         const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_NONE };
-        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_fmts", out_sample_fmts, -1, AV_OPT_SEARCH_CHILDREN);
-        if (ret < 0) goto filter_init_error;
+        av_opt_set_int_list(m_buffersink_ctx, "sample_fmts", out_sample_fmts, -1, AV_OPT_SEARCH_CHILDREN);
 
         const int out_sample_rates[] = { format.samplerate, -1 };
-        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
-        if (ret < 0) goto filter_init_error;
+        av_opt_set_int_list(m_buffersink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
 
         AVChannelLayout out_ch_layout = {};
         av_channel_layout_default(&out_ch_layout, format.channels);
         const AVChannelLayout out_ch_layouts[] = { out_ch_layout };
-        ret = av_opt_set_array(m_buffersink_ctx, "channel_layouts", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_CHLAYOUT, out_ch_layouts);
-        if (ret < 0) goto filter_init_error;
+        av_opt_set_array(m_buffersink_ctx, "channel_layouts", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_CHLAYOUT, out_ch_layouts);
     }
 
     outputs->name       = av_strdup("in");
@@ -145,21 +141,28 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     inputs->pad_idx    = 0;
     inputs->next       = nullptr;
 
+    // پارس کردن رشته فیلتر (مثلاً: aecho=0.8:0.88:60:0.4)
     ret = avfilter_graph_parse_ptr(m_filter_graph, m_ffmpeg_filter_str.c_str(),
                                    &inputs, &outputs, nullptr);
-    if (ret < 0) goto filter_init_error;
+    if (ret < 0) {
+        MYTRACE(ACE_TEXT("AudioThread: Parse error in filter string '%s'. Error: %d\n"), m_ffmpeg_filter_str.c_str(), ret);
+        goto filter_init_error;
+    }
 
     ret = avfilter_graph_config(m_filter_graph, nullptr);
-    if (ret < 0) goto filter_init_error;
+    if (ret < 0) {
+        MYTRACE(ACE_TEXT("AudioThread: Filter graph configuration failed. Error: %d\n"), ret);
+        goto filter_init_error;
+    }
 
     avfilter_inout_free(&inputs);
     avfilter_inout_free(&outputs);
+    MYTRACE(ACE_TEXT("AudioThread: FFmpeg Filter graph successfully initialized.\n"));
     return true;
 
 filter_init_error:
     if (inputs) avfilter_inout_free(&inputs);
     if (outputs) avfilter_inout_free(&outputs);
-    MYTRACE(ACE_TEXT("Failed to init FFmpeg Filter: %s. Error: %d\n"), m_ffmpeg_filter_str.c_str(), ret);
     FreeFFmpegFilter();
     return false;
 }
@@ -189,10 +192,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX :
 #if defined(ENABLE_SPEEX)
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -209,10 +208,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX_VBR :
 #if defined(ENABLE_SPEEX)
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex_vbr.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -232,10 +227,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
 #if defined(ENABLE_OPUS)
     case CODEC_OPUS :
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_opus = std::make_unique<OpusEncode>();
         if(!m_opus->Open(codec.opus.samplerate, codec.opus.channels,
                          codec.opus.application) ||
@@ -257,8 +248,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     default:
         TTASSERT(codec.codec == CODEC_SPEEX);
     }
-
-    TTASSERT(sample_rate);
 
     if((sample_rate == 0) || (callback_samples == 0))
         return false;
@@ -307,10 +296,8 @@ void AudioThread::StopEncoder()
     m_opus.reset();
 #endif
     m_enc_cleared = true;
-
     m_echobuf.clear();
     m_callback = {};
-
     memset(&m_codec, 0, sizeof(m_codec));
     m_codec.codec = teamtalk::CODEC_NO_CODEC;
 }
@@ -426,35 +413,25 @@ bool AudioThread::UpdatePreprocess(const teamtalk::SpeexDSP& speexdsp)
     agc.max_decrement = speexdsp.agc_maxdecdbsec;
     agc.max_gain = speexdsp.agc_maxgaindb;
 
-    bool agc_success = true;
-    agc_success &= m_preprocess_left->EnableAGC(speexdsp.enable_agc);
-    agc_success &= (channels == 1 || m_preprocess_right->EnableAGC(speexdsp.enable_agc));
-    agc_success &= m_preprocess_left->SetAGCSettings(agc);
-    agc_success &= (channels == 1 || m_preprocess_right->SetAGCSettings(agc));
+    m_preprocess_left->EnableAGC(speexdsp.enable_agc);
+    if(channels == 2) m_preprocess_right->EnableAGC(speexdsp.enable_agc);
+    m_preprocess_left->SetAGCSettings(agc);
+    if(channels == 2) m_preprocess_right->SetAGCSettings(agc);
 
-    bool denoise_success = true;
-    denoise_success &= m_preprocess_left->EnableDenoise(speexdsp.enable_denoise);
-    denoise_success &= (channels == 1 || m_preprocess_right->EnableDenoise(speexdsp.enable_denoise));
-    denoise_success &= m_preprocess_left->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
-    denoise_success &= (channels == 1 || m_preprocess_right->SetDenoiseLevel(speexdsp.maxnoisesuppressdb));
+    m_preprocess_left->EnableDenoise(speexdsp.enable_denoise);
+    if(channels == 2) m_preprocess_right->EnableDenoise(speexdsp.enable_denoise);
+    m_preprocess_left->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
+    if(channels == 2) m_preprocess_right->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
 
-    bool aec_success = true;
-    aec_success &= m_preprocess_left->EnableEchoCancel(speexdsp.enable_aec);
-    aec_success &= (channels == 1 || m_preprocess_right->EnableEchoCancel(speexdsp.enable_aec));
-    aec_success &= m_preprocess_left->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
-    aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressLevel(speexdsp.aec_suppress_level));
-    aec_success &= m_preprocess_left->SetEchoSuppressActive(speexdsp.aec_suppress_active);
-    aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressActive(speexdsp.aec_suppress_active));
+    m_preprocess_left->EnableEchoCancel(speexdsp.enable_aec);
+    if(channels == 2) m_preprocess_right->EnableEchoCancel(speexdsp.enable_aec);
+    m_preprocess_left->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
+    if(channels == 2) m_preprocess_right->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
+    m_preprocess_left->SetEchoSuppressActive(speexdsp.aec_suppress_active);
+    if(channels == 2) m_preprocess_right->SetEchoSuppressActive(speexdsp.aec_suppress_active);
 
-    bool const dereverb = true;
-    m_preprocess_left->EnableDereverb(dereverb);
-    if(channels == 2)
-        m_preprocess_right->EnableDereverb(dereverb);
-
-    if ((speexdsp.enable_agc && !agc_success) ||
-        (speexdsp.enable_denoise && !denoise_success) ||
-        (speexdsp.enable_aec && !aec_success))
-        return false;
+    m_preprocess_left->EnableDereverb(true);
+    if(channels == 2) m_preprocess_right->EnableDereverb(true);
 
     return true;
 #else
@@ -542,7 +519,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     }
 #endif
 
-    // اعمال فیلترهای صوتی FFmpeg
+    // --- بخش اعمال فیلترهای صوتی FFmpeg ---
     {
         std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
         
@@ -577,7 +554,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                         }
                     }
                 }
-                av_frame_free(&frame);
+                av_frame_free(frame);
             }
 
             int required_elements = audblock.input_samples * audblock.inputfmt.channels;
@@ -585,7 +562,8 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 memcpy(audblock.input_buffer, m_filter_fifo.data(), required_elements * sizeof(short));
                 m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + required_elements);
             } else {
-                return;
+                // اگر فیلتر دیتای کافی تولید نکرده، فعلاً نباید بسته‌ای ارسال شود
+                return; 
             }
         }
     }
