@@ -1,5 +1,24 @@
 /*
  * Copyright (c) 2005-2018, BearWare.dk
+ * 
+ * Contact Information:
+ *
+ * Bjoern D. Rasmussen
+ * Kirketoften 5
+ * DK-8260 Viby J
+ * Denmark
+ * Email: contact@bearware.dk
+ * Phone: +45 20 20 54 59
+ * Web: http://www.bearware.dk
+ *
+ * This source code is part of the TeamTalk SDK owned by
+ * BearWare.dk. Use of this file, or its compiled unit, requires a
+ * TeamTalk SDK License Key issued by BearWare.dk.
+ *
+ * The TeamTalk SDK License Agreement along with its Terms and
+ * Conditions are outlined in the file License.txt included with the
+ * TeamTalk SDK distribution.
+ *
  */
 
 #include "AudioThread.h"
@@ -192,6 +211,10 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX :
 #if defined(ENABLE_SPEEX)
     {
+        TTASSERT(callback_samples);
+        TTASSERT(sample_rate);
+        TTASSERT(channels);
+
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -208,6 +231,10 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX_VBR :
 #if defined(ENABLE_SPEEX)
     {
+        TTASSERT(callback_samples);
+        TTASSERT(sample_rate);
+        TTASSERT(channels);
+
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex_vbr.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -227,6 +254,10 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
 #if defined(ENABLE_OPUS)
     case CODEC_OPUS :
     {
+        TTASSERT(callback_samples);
+        TTASSERT(sample_rate);
+        TTASSERT(channels);
+
         m_opus = std::make_unique<OpusEncode>();
         if(!m_opus->Open(codec.opus.samplerate, codec.opus.channels,
                          codec.opus.application) ||
@@ -248,6 +279,8 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     default:
         TTASSERT(codec.codec == CODEC_SPEEX);
     }
+
+    TTASSERT(sample_rate);
 
     if((sample_rate == 0) || (callback_samples == 0))
         return false;
@@ -296,8 +329,10 @@ void AudioThread::StopEncoder()
     m_opus.reset();
 #endif
     m_enc_cleared = true;
+
     m_echobuf.clear();
     m_callback = {};
+
     memset(&m_codec, 0, sizeof(m_codec));
     m_codec.codec = teamtalk::CODEC_NO_CODEC;
 }
@@ -413,25 +448,35 @@ bool AudioThread::UpdatePreprocess(const teamtalk::SpeexDSP& speexdsp)
     agc.max_decrement = speexdsp.agc_maxdecdbsec;
     agc.max_gain = speexdsp.agc_maxgaindb;
 
-    m_preprocess_left->EnableAGC(speexdsp.enable_agc);
-    if(channels == 2) m_preprocess_right->EnableAGC(speexdsp.enable_agc);
-    m_preprocess_left->SetAGCSettings(agc);
-    if(channels == 2) m_preprocess_right->SetAGCSettings(agc);
+    bool agc_success = true;
+    agc_success &= m_preprocess_left->EnableAGC(speexdsp.enable_agc);
+    agc_success &= (channels == 1 || m_preprocess_right->EnableAGC(speexdsp.enable_agc));
+    agc_success &= m_preprocess_left->SetAGCSettings(agc);
+    agc_success &= (channels == 1 || m_preprocess_right->SetAGCSettings(agc));
 
-    m_preprocess_left->EnableDenoise(speexdsp.enable_denoise);
-    if(channels == 2) m_preprocess_right->EnableDenoise(speexdsp.enable_denoise);
-    m_preprocess_left->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
-    if(channels == 2) m_preprocess_right->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
+    bool denoise_success = true;
+    denoise_success &= m_preprocess_left->EnableDenoise(speexdsp.enable_denoise);
+    denoise_success &= (channels == 1 || m_preprocess_right->EnableDenoise(speexdsp.enable_denoise));
+    denoise_success &= m_preprocess_left->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
+    denoise_success &= (channels == 1 || m_preprocess_right->SetDenoiseLevel(speexdsp.maxnoisesuppressdb));
 
-    m_preprocess_left->EnableEchoCancel(speexdsp.enable_aec);
-    if(channels == 2) m_preprocess_right->EnableEchoCancel(speexdsp.enable_aec);
-    m_preprocess_left->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
-    if(channels == 2) m_preprocess_right->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
-    m_preprocess_left->SetEchoSuppressActive(speexdsp.aec_suppress_active);
-    if(channels == 2) m_preprocess_right->SetEchoSuppressActive(speexdsp.aec_suppress_active);
+    bool aec_success = true;
+    aec_success &= m_preprocess_left->EnableEchoCancel(speexdsp.enable_aec);
+    aec_success &= (channels == 1 || m_preprocess_right->EnableEchoCancel(speexdsp.enable_aec));
+    aec_success &= m_preprocess_left->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
+    aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressLevel(speexdsp.aec_suppress_level));
+    aec_success &= m_preprocess_left->SetEchoSuppressActive(speexdsp.aec_suppress_active);
+    aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressActive(speexdsp.aec_suppress_active));
 
-    m_preprocess_left->EnableDereverb(true);
-    if(channels == 2) m_preprocess_right->EnableDereverb(true);
+    bool const dereverb = true;
+    m_preprocess_left->EnableDereverb(dereverb);
+    if(channels == 2)
+        m_preprocess_right->EnableDereverb(dereverb);
+
+    if ((speexdsp.enable_agc && !agc_success) ||
+        (speexdsp.enable_denoise && !denoise_success) ||
+        (speexdsp.enable_aec && !aec_success))
+        return false;
 
     return true;
 #else
@@ -447,6 +492,9 @@ void AudioThread::MuteSound(bool leftchannel, bool rightchannel)
 void AudioThread::QueueAudio(const media::AudioFrame& audframe)
 {
     TTASSERT(m_codec.codec != CODEC_NO_CODEC);
+    assert(audframe.inputfmt.channels == audframe.outputfmt.channels || audframe.outputfmt.channels == 0);
+    assert(audframe.input_samples == audframe.output_samples || audframe.output_samples == 0);
+
     ACE_Message_Block* mb = AudioFrameToMsgBlock(audframe);
     if (mb != nullptr)
         QueueAudio(mb);
@@ -554,7 +602,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                         }
                     }
                 }
-                av_frame_free(frame);
+                av_frame_free(&frame); // <--- این خط تصحیح شد
             }
 
             int required_elements = audblock.input_samples * audblock.inputfmt.channels;
@@ -702,10 +750,10 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
 void AudioThread::PreprocessWebRTC(media::AudioFrame& audblock)
 {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-    if (m_apm) {
-        if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
-            // Error handling
-        }
+    if (!m_apm) return;
+
+    if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
+        MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
     }
 }
 #endif
