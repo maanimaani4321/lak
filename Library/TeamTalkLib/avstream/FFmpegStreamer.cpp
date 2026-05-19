@@ -311,6 +311,16 @@ void FFmpegStreamer::Run()
     int ret = 0;
     bool start = false;
 
+    // تعریف تمامی متغیرها در بالاترین نقطه ممکن برای جلوگیری از خطای کامپایلر C++ در برخورد با goto
+    bool flush = false;
+    MediaStreamStatus status = MEDIASTREAM_NONE;
+    ACE_UINT32 start_time = 0;
+    ACE_UINT32 start_offset = 0;
+    ACE_UINT32 totalpausetime = 0;
+    int64_t curaudiotime = 0;
+    int64_t curvideotime = 0;
+    AVPacket packet;
+
     if(!SetupInput(in_fmt, options, fmt_ctx, aud_dec_ctx, vid_dec_ctx,
                    audio_stream_index, video_stream_index))
     {
@@ -388,23 +398,12 @@ void FFmpegStreamer::Run()
     if(!start)
         goto fail;
 
-    MediaStreamStatus status;
-    ACE_UINT32 start_time;
-    ACE_UINT32 start_offset;
-    ACE_UINT32 totalpausetime;
-    int64_t curaudiotime;
-    int64_t curvideotime;
-
     status = MEDIASTREAM_STARTED;
     start_time = GETTIMESTAMP();
     start_offset = MEDIASTREAMER_OFFSET_IGNORE;
     totalpausetime = 0;
     curaudiotime = curvideotime = 0;
-
-    /* read all packets */
-    AVPacket packet;
-
-    bool flush = false;
+    flush = false;
 
     while (!m_stop)
     {
@@ -952,15 +951,6 @@ AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
     if ((ret = avfilter_graph_config(filter_graph, nullptr)) < 0)
         goto error;
 
-    /* Print summary of the sink buffer
-     * Note: args buffer is reused to store channel layout string */
-    outlink = aud_buffersink_ctx->inputs[0];
-    // av_get_channel_layout_string(args, sizeof(args), -1, outlink->channel_layout);
-    // av_log(NULL, AV_LOG_INFO, "Output: srate:%dHz fmt:%s chlayout:%s\n",
-    //        (int)outlink->sample_rate,
-    //        (char *)av_x_if_null(av_get_sample_fmt_name((AVSampleFormat)outlink->format), "?"),
-    //        args);
-
     goto end;
 
 error:
@@ -968,8 +958,6 @@ error:
     filter_graph = nullptr;
 
 end:
-    // avfilter_inout_free(&inputs);
-    // avfilter_inout_free(&outputs);
 
     return filter_graph;
 }
@@ -1088,8 +1076,6 @@ error:
     filter_graph = nullptr;
 
 end:
-    // avfilter_inout_free(&inputs);
-    // avfilter_inout_free(&outputs);
 
     return filter_graph;
 

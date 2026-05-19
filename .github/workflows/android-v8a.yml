@@ -38,7 +38,7 @@ jobs:
           mkdir -p final_output/binaries
           mkdir -p final_output/dependencies
           
-          find . -name "libTeamTalk5*.so" ! -name "*pro*" -exec cp {} final_output/binaries/ \; || true
+          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
           
           mkdir -p final_output/teamtalk_headers
           find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
