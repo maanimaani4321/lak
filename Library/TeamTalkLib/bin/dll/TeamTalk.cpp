@@ -2215,7 +2215,8 @@ TEAMTALKDLL_API TTBOOL TT_UpdateStreamingMediaFileToChannel(IN TTInstance* lpTTI
 
     return static_cast<TTBOOL>(clientnode->UpdateStreamingMediaFile(lpMediaFilePlayback->uOffsetMSec,
                                                 lpMediaFilePlayback->bPaused != 0,
-                                                preprocessor, vid_codec));
+                                                preprocessor, vid_codec,
+                                                lpMediaFilePlayback->fPlaybackSpeed));
 }
 
 TEAMTALKDLL_API TTBOOL TT_StopStreamingMediaFileToChannel(IN TTInstance* lpTTInstance)

@@ -3313,7 +3313,8 @@ bool ClientNode::StartStreamingMediaFile(const ACE_TString& filename,
 
 bool ClientNode::UpdateStreamingMediaFile(uint32_t offset, bool paused,
                                           const AudioPreprocessor& preprocessor,
-                                          const VideoCodec& vid_codec)
+                                          const VideoCodec& vid_codec,
+                                          float speed)
 {
     if (!m_mediafile_streamer || m_mediafile_streamer->Completed())
         return false;
@@ -3331,7 +3332,7 @@ bool ClientNode::UpdateStreamingMediaFile(uint32_t offset, bool paused,
     if (!m_audiofile_thread.UpdatePreprocessor(preprocessor))
         return false;
 
-    m_mediafile_streamer->SetOffset(offset);
+    m_mediafile_streamer->UpdatePlayback(offset, speed);
 
     if (paused)
         return m_mediafile_streamer->Pause();

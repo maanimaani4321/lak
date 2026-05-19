@@ -27,7 +27,6 @@
 #include "myace/MyACE.h"
 #include "mystd/MyStd.h"
 
-
 #if defined(__APPLE__)
 #include <mach/mach_time.h>
 #endif
@@ -52,7 +51,6 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
-
 
 constexpr auto DEBUG_FFMPEG = 0;
 
@@ -201,7 +199,8 @@ static AVFilterGraph* CreateVideoFilterGraph(AVFormatContext *fmt_ctx,
                                       AVFilterContext*& vid_buffersink_ctx,
                                       AVFilterContext*& vid_buffersrc_ctx,
                                       int video_stream_index,
-                                      AVPixelFormat output_pixfmt);
+                                      AVPixelFormat output_pixfmt,
+                                      float speed);
 
 static void FillMediaFileProp(AVFormatContext *fmt_ctx,
                        AVCodecContext *aud_dec_ctx,
@@ -280,6 +279,14 @@ bool FFmpegStreamer::SetupInput(const AVInputFormat *iformat,
                      vid_dec_ctx, audio_stream_index, video_stream_index);
 }
 
+void FFmpegStreamer::UpdatePlayback(uint32_t offset, float speed)
+{
+    if (std::abs(m_media_out.speed - speed) > 0.01f) {
+        m_media_out.speed = speed;
+        m_rebuild_graph = true;
+    }
+    SetOffset(offset);
+}
 
 void FFmpegStreamer::Run()
 {
@@ -349,7 +356,8 @@ void FFmpegStreamer::Run()
                                                     vid_buffersink_ctx,
                                                     vid_buffersrc_ctx,
                                                     video_stream_index,
-                                                    AV_PIX_FMT_RGB32);
+                                                    AV_PIX_FMT_RGB32,
+                                                    m_media_out.speed);
         if(video_filter_graph == nullptr)
         {
             m_open.set(false);
@@ -396,6 +404,8 @@ void FFmpegStreamer::Run()
     /* read all packets */
     AVPacket packet;
 
+    bool flush = false;
+
     while (!m_stop)
     {
         MYTRACE_COND(DEBUG_MEDIASTREAMER, ACE_TEXT("Sync. Audio %u, Video %u\n"), ACE_UINT32(curaudiotime),
@@ -430,10 +440,49 @@ void FFmpegStreamer::Run()
             totalpausetime += pausetime;
         }
 
-        // check if we should seek
+        bool rebuild = m_rebuild_graph.exchange(false);
         auto newoffset = SetOffset(MEDIASTREAMER_OFFSET_IGNORE);
-        if (newoffset != MEDIASTREAMER_OFFSET_IGNORE)
+
+        // check if we should seek or rebuild
+        if (newoffset != MEDIASTREAMER_OFFSET_IGNORE || rebuild)
         {
+            if (newoffset == MEDIASTREAMER_OFFSET_IGNORE)
+                newoffset = m_media_in.elapsed_ms; // حفظ موقعیت فعلی در صورت تغییر سرعت
+
+            if (rebuild)
+            {
+                if (audio_filter_graph != nullptr) {
+                    avfilter_graph_free(&audio_filter_graph);
+                    aud_buffersink_ctx = nullptr;
+                    aud_buffersrc_ctx = nullptr;
+                }
+                if (m_media_out.HasAudio() && audio_stream_index >= 0) {
+                    audio_filter_graph = CreateAudioFilterGraph(fmt_ctx, aud_dec_ctx,
+                                                                aud_buffersink_ctx,
+                                                                aud_buffersrc_ctx,
+                                                                audio_stream_index,
+                                                                m_media_out.audio.channels,
+                                                                m_media_out.audio.samplerate,
+                                                                m_media_out.speed);
+                }
+                if (video_filter_graph != nullptr) {
+                    avfilter_graph_free(&video_filter_graph);
+                    vid_buffersink_ctx = nullptr;
+                    vid_buffersrc_ctx = nullptr;
+                }
+                if (m_media_out.video.fourcc != media::FOURCC_NONE && video_stream_index >= 0) {
+                    video_filter_graph = CreateVideoFilterGraph(fmt_ctx, vid_dec_ctx,
+                                                                vid_buffersink_ctx,
+                                                                vid_buffersrc_ctx,
+                                                                video_stream_index,
+                                                                AV_PIX_FMT_RGB32,
+                                                                m_media_out.speed);
+                }
+            }
+
+            // شمارنده دقیق سمپل‌ها برای زمان‌بندی صوتی
+            m_audio_samples_out = (static_cast<uint64_t>(newoffset) * m_media_out.audio.samplerate) / 1000;
+
             double offset_sec = newoffset;
             offset_sec /= 1000.0;
 
@@ -442,11 +491,8 @@ void FFmpegStreamer::Run()
             if (audio_stream_index >= 0)
             {
                 auto *aud_stream = fmt_ctx->streams[audio_stream_index];
-                double const curaudio_sec = curaudiotime / 1000.0;
-                double const difftime_sec = (offset_sec > curaudio_sec)? offset_sec - curaudio_sec : curaudio_sec - offset_sec;
-
-                if (av_seek_frame(fmt_ctx, audio_stream_index, difftime_sec / av_q2d(aud_stream->time_base),
-                                  (offset_sec > curaudio_sec? 0 : AVSEEK_FLAG_BACKWARD)) < 0)
+                if (av_seek_frame(fmt_ctx, audio_stream_index, offset_sec / av_q2d(aud_stream->time_base),
+                                  AVSEEK_FLAG_BACKWARD) < 0)
                 {
                     MYTRACE(ACE_TEXT("Failed to seek to audio position %u in %s\n"), ACE_UINT32(offset_sec * 1000), m_media_in.filename.c_str());
                     success = false;
@@ -460,11 +506,8 @@ void FFmpegStreamer::Run()
             if (video_stream_index >= 0)
             {
                 auto *vid_stream = fmt_ctx->streams[video_stream_index];
-                double const curvideo_sec = curvideotime / 1000.0;
-                double const difftime_sec = (offset_sec > curvideo_sec)? offset_sec - curvideo_sec : curvideo_sec - offset_sec;
-
-                if (av_seek_frame(fmt_ctx, video_stream_index, difftime_sec / av_q2d(vid_stream->time_base),
-                                  (offset_sec > curvideo_sec? 0 : AVSEEK_FLAG_BACKWARD)) < 0)
+                if (av_seek_frame(fmt_ctx, video_stream_index, offset_sec / av_q2d(vid_stream->time_base),
+                                  AVSEEK_FLAG_BACKWARD) < 0)
                 {
                     MYTRACE(ACE_TEXT("Failed to seek to video position %u in %s\n"), ACE_UINT32(offset_sec * 1000), m_media_in.filename.c_str());
                     success = false;
@@ -473,7 +516,6 @@ void FFmpegStreamer::Run()
                 {
                     MYTRACE(ACE_TEXT("Seeked to video position %u in %s\n"), ACE_UINT32(offset_sec * 1000), m_media_in.filename.c_str());
                 }
-
             }
 
             if (success)
@@ -640,12 +682,9 @@ int64_t FFmpegStreamer::ProcessAudioBuffer(AVFilterContext* aud_buffersink_ctx,
     if(ret < 0)
         return -1;
 
-    int64_t const frame_tm = filt_frame->best_effort_timestamp;
-    double frame_sec = frame_tm * av_q2d(aud_stream->time_base);
-    // initial frame may be -0.000072
-    MYTRACE_COND(frame_sec < 0., ACE_TEXT("Audio frame time is less than 0: %g\n"), frame_sec);
-    frame_sec = std::max(0., frame_sec);
+    double frame_sec = (double)m_audio_samples_out / m_media_out.audio.samplerate;
     auto frame_timestamp = ACE_UINT32(frame_sec * 1000.0); //msec
+    m_audio_samples_out += filt_frame->nb_samples;
 
     if (!IsSystemTime())
     {
@@ -941,7 +980,8 @@ AVFilterGraph* CreateVideoFilterGraph(AVFormatContext *fmt_ctx,
                                       AVFilterContext*& vid_buffersink_ctx,
                                       AVFilterContext*& vid_buffersrc_ctx,
                                       int video_stream_index,
-                                      AVPixelFormat output_pixfmt)
+                                      AVPixelFormat output_pixfmt,
+                                      float speed)
 {
     //init filters
     AVFilterGraph *filter_graph = nullptr;
@@ -952,10 +992,15 @@ AVFilterGraph* CreateVideoFilterGraph(AVFormatContext *fmt_ctx,
     AVFilterInOut *outputs = avfilter_inout_alloc();
     AVFilterInOut *inputs  = avfilter_inout_alloc();
     AVRational const time_base = fmt_ctx->streams[video_stream_index]->time_base;
-    char filters_descr[100];
+    char filters_descr[256];
 
-    snprintf(filters_descr, sizeof(filters_descr), "scale=%d:%d",
-             vid_dec_ctx->width, vid_dec_ctx->height);
+    if (speed != 1.0f && speed >= 0.1f) {
+        snprintf(filters_descr, sizeof(filters_descr), "setpts=(PTS-STARTPTS)/%f+STARTPTS,scale=%d:%d", 
+                 speed, vid_dec_ctx->width, vid_dec_ctx->height);
+    } else {
+        snprintf(filters_descr, sizeof(filters_descr), "scale=%d:%d", 
+                 vid_dec_ctx->width, vid_dec_ctx->height);
+    }
 
     filter_graph = avfilter_graph_alloc();
 
