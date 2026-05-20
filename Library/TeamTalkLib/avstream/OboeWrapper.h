@@ -1,4 +1,6 @@
-/* OboeWrapper.h */
+/*
+ * OboeWrapper.h
+ */
 #ifndef OBOEWRAPPER_H
 #define OBOEWRAPPER_H
 
@@ -12,7 +14,7 @@ namespace soundsystem {
     struct OboeInputStreamer : InputStreamer, public oboe::AudioStreamDataCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
-        std::vector<short> buffer; // بافر برای تطبیق سایز فریم Oboe با TeamTalk
+        std::vector<short> buffer;
 
         OboeInputStreamer(StreamCapture* r, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
@@ -23,7 +25,7 @@ namespace soundsystem {
     struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
-        std::vector<short> buffer; // بافر برای تطبیق سایز فریم TeamTalk با Oboe
+        std::vector<short> buffer;
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
