@@ -7,13 +7,12 @@
 #include <mutex>
 #include <vector>
 
-constexpr auto ANDROID_OBOE_BUFFERS = 2;
-
 namespace soundsystem {
 
     struct OboeInputStreamer : InputStreamer, public oboe::AudioStreamDataCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
+        std::vector<short> buffer; // بافر برای تطبیق سایز فریم Oboe با TeamTalk
 
         OboeInputStreamer(StreamCapture* r, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
@@ -24,6 +23,7 @@ namespace soundsystem {
     struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
+        std::vector<short> buffer; // بافر برای تطبیق سایز فریم TeamTalk با Oboe
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
@@ -66,7 +66,7 @@ namespace soundsystem {
         bool StopStream(outputstreamer_t streamer) override;
         bool IsStreamStopped(outputstreamer_t streamer) override;
 
-        // Duplex (Not Supported/Needed in this wrapper structure, mapped as dummy)
+        // Duplex 
         duplexstreamer_t NewStream(StreamDuplex* duplex, int inputdeviceid, int outputdeviceid, int sndgrpid, int samplerate, int input_channels, int output_channels, int framesize) override { return nullptr; }
         void CloseStream(duplexstreamer_t streamer) override { }
         bool StartStream(duplexstreamer_t streamer) override { return false; }

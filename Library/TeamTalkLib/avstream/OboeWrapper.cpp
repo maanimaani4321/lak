@@ -2,6 +2,8 @@
 #include "OboeWrapper.h"
 #include "myace/MyACE.h"
 #include <cassert>
+#include <cstring>
+#include <algorithm>
 
 namespace soundsystem {
 
@@ -41,7 +43,6 @@ soundgroup_t OboeWrapper::NewSoundGroup() {
 }
 
 void OboeWrapper::RemoveSoundGroup(soundgroup_t grp) {
-    // در Oboe نیازی به مدیریت دستی خروجی‌های میکس مثل OpenSL نیست
 }
 
 bool OboeWrapper::GetDefaultDevices(int& inputdeviceid, int& outputdeviceid) {
@@ -62,7 +63,6 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     dev.soundsystem = SOUND_API_OBOE_ANDROID;
     dev.id = DEFAULT_DEVICE_ID;
     
-    // Oboe به صورت خودکار تغییر سمپل ریت و کانال را مدیریت می‌کند
     for(int sr : standardSampleRates) {
         dev.input_samplerates.insert(sr);
         dev.output_samplerates.insert(sr);
@@ -76,24 +76,35 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     dev.output_channels.insert(2);
     dev.default_samplerate = DEFAULT_SAMPLERATE;
 
-    // ویژگی‌های سخت‌افزاری که با استفاده از Preset VoiceCommunication فعال می‌شوند
-    dev.features |= SOUNDDEVICEFEATURE_AEC;
-    dev.features |= SOUNDDEVICEFEATURE_AGC;
-    dev.features |= SOUNDDEVICEFEATURE_DENOISE;
-
+    // دیوایس 0
     sounddevs[dev.id] = dev;
 
-    // Voice Communication Device
+    // دیوایس 1 (دارای حذف اکو و نویز سخت‌افزاری)
     DeviceInfo voicecom_dev = dev;
     voicecom_dev.id = VOICECOM_DEVICE_ID;
     voicecom_dev.devicename = ACE_TEXT("Voice Communication Sound Device (Oboe)");
+    voicecom_dev.features |= SOUNDDEVICEFEATURE_AEC;
+    voicecom_dev.features |= SOUNDDEVICEFEATURE_AGC;
+    voicecom_dev.features |= SOUNDDEVICEFEATURE_DENOISE;
     sounddevs[voicecom_dev.id] = voicecom_dev;
 }
 
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
     std::lock_guard<std::recursive_mutex> g(mutex);
     
-    recorder->StreamCaptureCb(*this, static_cast<const short*>(audioData), numFrames);
+    short* pcmData = static_cast<short*>(audioData);
+    int totalNewSamples = numFrames * channels;
+
+    // ذخیره فریم‌های جدیدِ Oboe در بافر واسط
+    buffer.insert(buffer.end(), pcmData, pcmData + totalNewSamples);
+
+    int requiredSamples = framesize * channels;
+
+    // ارسال به TeamTalk فقط زمانی که دقیقاً به اندازه سایز استانداردِ تیم‌تاک دیتا جمع شده باشد
+    while (buffer.size() >= (size_t)requiredSamples) {
+        recorder->StreamCaptureCb(*this, buffer.data(), framesize);
+        buffer.erase(buffer.begin(), buffer.begin() + requiredSamples);
+    }
     
     return oboe::DataCallbackResult::Continue;
 }
@@ -110,7 +121,6 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setDataCallback(streamer.get());
 
     if (inputdeviceid == VOICECOM_DEVICE_ID || (capture->GetCaptureFeatures() & SOUNDDEVICEFEATURE_AEC)) {
-        // این گزینه به اندروید می‌گوید که از تمام میکروفون‌ها برای حذف اکو و نویز استفاده کند
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
         MYTRACE(ACE_TEXT("Oboe: Activated VoiceCommunication preset for Hardware AEC/NS\n"));
     } else {
@@ -149,7 +159,6 @@ bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
 }
 
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
-    // در Oboe، ویژگی‌های سخت افزاری در زمان ساخت Stream تنظیم می‌شوند (InputPreset).
     return true; 
 }
 
@@ -157,11 +166,34 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
 oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
     std::lock_guard<std::recursive_mutex> g(mutex);
     
-    bool more = player->StreamPlayerCb(*this, static_cast<short*>(audioData), numFrames);
+    short* outData = static_cast<short*>(audioData);
+    int requiredSamplesForOboe = numFrames * channels;
+    int teamTalkChunkSamples = framesize * channels;
     
-    int mastervol = OboeWrapper::getInstance()->GetMasterVolume(sndgrpid);
-    bool mastermute = OboeWrapper::getInstance()->IsAllMute(sndgrpid);
-    SoftVolume(*this, static_cast<short*>(audioData), numFrames, mastervol, mastermute);
+    bool more = true;
+
+    // پر کردن بافر واسط تا زمانی که به اندازه درخواست Oboe دیتا داشته باشیم
+    while (buffer.size() < (size_t)requiredSamplesForOboe && more) {
+        std::vector<short> tmpChunk(teamTalkChunkSamples, 0);
+        
+        more = player->StreamPlayerCb(*this, tmpChunk.data(), framesize);
+        
+        int mastervol = OboeWrapper::getInstance()->GetMasterVolume(sndgrpid);
+        bool mastermute = OboeWrapper::getInstance()->IsAllMute(sndgrpid);
+        SoftVolume(*this, tmpChunk.data(), framesize, mastervol, mastermute);
+
+        buffer.insert(buffer.end(), tmpChunk.begin(), tmpChunk.end());
+    }
+
+    // کپی کردن دیتا برای پخش در اسپیکر
+    int copySamples = std::min((int)buffer.size(), requiredSamplesForOboe);
+    std::memcpy(outData, buffer.data(), copySamples * sizeof(short));
+    buffer.erase(buffer.begin(), buffer.begin() + copySamples);
+
+    // اگر دیتای کافی وجود نداشت (مثلاً پایان استریم)، مابقی را با سکوت (صفر) پر می‌کنیم تا صدای ناهنجار تولید نشود
+    if (copySamples < requiredSamplesForOboe) {
+        std::memset(outData + copySamples, 0, (requiredSamplesForOboe - copySamples) * sizeof(short));
+    }
 
     return more ? oboe::DataCallbackResult::Continue : oboe::DataCallbackResult::Stop;
 }
