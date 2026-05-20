@@ -129,15 +129,18 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
 
+    // Fast append to static FIFO buffer
     if (fifo_size + totalIncomingSamples > fifo_buffer.size()) {
         fifo_buffer.resize(fifo_size + totalIncomingSamples + (requiredSamples * 2));
     }
     std::memcpy(&fifo_buffer[fifo_size], pcmData, totalIncomingSamples * sizeof(short));
     fifo_size += totalIncomingSamples;
 
+    // Flush standard chunk sizes to TeamTalk
     while (fifo_size >= requiredSamples) {
         recorder->StreamCaptureCb(*this, fifo_buffer.data(), framesize);
         
+        // Shift buffer (RingBuffer behavior)
         fifo_size -= requiredSamples;
         if (fifo_size > 0) {
             std::memmove(&fifo_buffer[0], &fifo_buffer[requiredSamples], fifo_size * sizeof(short));
@@ -168,7 +171,7 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
 
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
-    builder.setSampleRateConversionAllowed(true);
+    builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium); // اصلاح نحوه فعال‌سازی مبدل سمپل‌ریت
 
     if (inputdeviceid == VOICECOM_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
@@ -258,7 +261,7 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         std::memcpy(outData, fifo_buffer.data(), samplesToCopy * sizeof(short));
         fifo_size -= samplesToCopy;
         if (fifo_size > 0) {
-            std::memmove(&buffer[0], &buffer[samplesToCopy], fifo_size * sizeof(short));
+            std::memmove(&fifo_buffer[0], &fifo_buffer[samplesToCopy], fifo_size * sizeof(short)); // تصحیح نام متغیر از buffer به fifo_buffer
         }
     }
 
@@ -291,7 +294,7 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
 
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
-    builder.setSampleRateConversionAllowed(true);
+    builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium); // اصلاح نحوه فعال‌سازی مبدل سمپل‌ریت
 
     if (outputdeviceid == VOICECOM_DEVICE_ID) {
         builder.setUsage(oboe::Usage::VoiceCommunication);
