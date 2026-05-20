@@ -123,17 +123,28 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
 
     ret = avfilter_graph_create_filter(&m_buffersrc_ctx, abuffersrc, "in",
                                        args, nullptr, m_filter_graph);
-    if (ret < 0) {
-        MYTRACE(ACE_TEXT("AudioThread: Cannot create buffer source. Error: %d\n"), ret);
-        goto filter_init_error;
-    }
+    if (ret < 0) goto filter_init_error;
 
     // تنظیم خروجی گراف
     ret = avfilter_graph_create_filter(&m_buffersink_ctx, abuffersink, "out",
                                        nullptr, nullptr, m_filter_graph);
-    if (ret < 0) {
-        MYTRACE(ACE_TEXT("AudioThread: Cannot create buffer sink. Error: %d\n"), ret);
-        goto filter_init_error;
+    if (ret < 0) goto filter_init_error;
+
+    // اجبار به خروجی s16 استاندارد
+    {
+        const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_NONE };
+        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_fmts", out_sample_fmts, -1, AV_OPT_SEARCH_CHILDREN);
+        if (ret < 0) goto filter_init_error;
+
+        const int out_sample_rates[] = { format.samplerate, -1 };
+        ret = av_opt_set_int_list(m_buffersink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
+        if (ret < 0) goto filter_init_error;
+
+        AVChannelLayout out_ch_layout = {};
+        av_channel_layout_default(&out_ch_layout, format.channels);
+        const AVChannelLayout out_ch_layouts[] = { out_ch_layout };
+        ret = av_opt_set_array(m_buffersink_ctx, "channel_layouts", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_CHLAYOUT, out_ch_layouts);
+        if (ret < 0) goto filter_init_error;
     }
 
     outputs->name       = av_strdup("in");
@@ -146,7 +157,6 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     inputs->pad_idx    = 0;
     inputs->next       = nullptr;
 
-    // تکنیک جلوگیری از سوت کشیدن: مجبور کردن FFmpeg به خروجی s16 استاندارد!
     {
         std::string final_filter = m_ffmpeg_filter_str + ",aformat=sample_fmts=s16:channel_layouts=";
         final_filter += (format.channels == 2 ? "stereo" : "mono");
@@ -545,7 +555,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     }
 #endif
 
-    // --- بخش اعمال فیلترهای صوتی FFmpeg (بدون سوت و قطعی) ---
+    // --- اعمال فیلترهای صوتی FFmpeg و تکنیک Dynamic Time Stretching ---
     {
         std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
         
@@ -561,7 +571,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 frame->format = AV_SAMPLE_FMT_S16;
                 frame->sample_rate = audblock.inputfmt.samplerate;
                 av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
-                frame->pts = AV_NOPTS_VALUE; // اجازه بده FFmpeg خودش محاسبه کند
+                frame->pts = AV_NOPTS_VALUE;
                 
                 if (av_frame_get_buffer(frame, 0) >= 0) {
                     memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
@@ -574,7 +584,6 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                                 break;
                             }
                             
-                            // گارد امنیتی: فقط در صورتی که خروجی S16 استاندارد باشد می‌خوانیم تا صدای سوت ندهد
                             if (out_frame->format == AV_SAMPLE_FMT_S16) {
                                 int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
                                 short* out_data = (short*)out_frame->data[0];
@@ -587,20 +596,65 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 av_frame_free(&frame);
             }
 
-            // مکانیزم پدینگ برای جلوگیری از قطعی صدا
-            int required_elements = audblock.input_samples * audblock.inputfmt.channels;
-            if (!m_filter_fifo.empty()) {
-                int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
-                memcpy(audblock.input_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
-                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
+            int req_elements = audblock.input_samples * audblock.inputfmt.channels;
+            int channels = audblock.inputfmt.channels;
+
+            // آستانه نرم (حدود 400 میلی‌ثانیه برای شروع جبران تاخیر)
+            size_t threshold_elements = req_elements * 20; 
+            // آستانه سخت (حدود 1 ثانیه برای جلوگیری از کرش)
+            size_t max_allowed_fifo = req_elements * 50; 
+
+            if (m_filter_fifo.size() > max_allowed_fifo) {
+                // Hard Drop - اینترنت یا سیستم فریز شده بوده
+                size_t excess = m_filter_fifo.size() - (req_elements * 10);
+                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + excess);
+            }
+
+            if (m_filter_fifo.size() >= (size_t)req_elements) {
                 
-                // اگر فیلتر کُند بود و فریم کامل نشد، بقیه‌اش را با سکوت پُر کن تا VAD و انکودر Crash نکنند
-                if (copy_elements < required_elements) {
-                    memset(audblock.input_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
+                if (m_filter_fifo.size() > threshold_elements) {
+                    // DYNAMIC TIME STRETCHING
+                    // سرعت پخش را به طور نامحسوس 5٪ افزایش می‌دهیم تا تاخیر جبران شود (بدون پرش)
+                    int consume_frames = (audblock.input_samples * 105) / 100;
+                    int consume_elements = consume_frames * channels;
+
+                    if (consume_elements > (int)m_filter_fifo.size()) {
+                        consume_elements = m_filter_fifo.size();
+                        consume_frames = consume_elements / channels;
+                    }
+
+                    int out_frames = audblock.input_samples;
+                    double ratio = (double)consume_frames / out_frames;
+
+                    const short* fifo_ptr = m_filter_fifo.data();
+                    for (int i = 0; i < out_frames; ++i) {
+                        double src_idx = i * ratio;
+                        int idx1 = (int)src_idx;
+                        int idx2 = std::min(idx1 + 1, consume_frames - 1);
+                        double frac = src_idx - idx1;
+
+                        for (int c = 0; c < channels; ++c) {
+                            short val1 = fifo_ptr[idx1 * channels + c];
+                            short val2 = fifo_ptr[idx2 * channels + c];
+                            // درون‌یابی خطی (Linear Interpolation) برای صدای نرم
+                            audblock.input_buffer[i * channels + c] = (short)(val1 + frac * (val2 - val1));
+                        }
+                    }
+                    m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + consume_elements);
+                } else {
+                    // حالت عادی (1:1)
+                    memcpy(audblock.input_buffer, m_filter_fifo.data(), req_elements * sizeof(short));
+                    m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + req_elements);
                 }
+
             } else {
-                // اگر فیلتر کلاً خالی بود (مثلاً در حال محاسبه delay است)، سکوت بفرست
-                memset(audblock.input_buffer, 0, required_elements * sizeof(short));
+                // دیتای فیلتر کافی نیست، پدینگ برای جلوگیری از قطع شدن استریم (مثلا هنگام اعمال اکو)
+                int copy_elements = m_filter_fifo.size();
+                if (copy_elements > 0) {
+                    memcpy(audblock.input_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
+                    m_filter_fifo.clear();
+                }
+                memset(audblock.input_buffer + copy_elements, 0, (req_elements - copy_elements) * sizeof(short));
             }
         }
     }
@@ -741,7 +795,7 @@ void AudioThread::PreprocessWebRTC(media::AudioFrame& audblock)
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
     if (m_apm) {
         if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
-            MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
+            // Error handling
         }
     }
 }
