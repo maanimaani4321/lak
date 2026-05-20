@@ -37,6 +37,7 @@ namespace soundsystem {
         std::recursive_mutex mutex;
         std::vector<short> fifo_buffer;
         int fifo_size = 0;
+        int fifo_capacity = 0; // ظرفیت از پیش تخصیص‌یافته جهت جلوگیری از تخصیص حافظه در ترد صوتی
 
         OboeInputStreamer(StreamCapture* r, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
@@ -48,9 +49,10 @@ namespace soundsystem {
     struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback, public oboe::AudioStreamErrorCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
-        std::vector<short> cb_buffer;   // Buffer aligned with TeamTalk requirements
-        std::vector<short> fifo_buffer; // Playback FIFO buffer for frame size adaptation
+        std::vector<short> cb_buffer;   
+        std::vector<short> fifo_buffer; 
         int fifo_size = 0;
+        int fifo_capacity = 0; // ظرفیت از پیش تخصیص‌یافته
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
@@ -108,6 +110,12 @@ namespace soundsystem {
 
         bool GetDefaultDevices(int& inputdeviceid, int& outputdeviceid) override;
         bool GetDefaultDevices(SoundAPI sndsys, int& inputdeviceid, int& outputdeviceid) override;
+
+        // Safe Fallback Helpers
+        bool IsCaptureValid(StreamCapture* capture);
+        bool IsPlayerValid(StreamPlayer* player);
+        void SafeRestartInputStream(StreamCapture* capture);
+        void SafeRestartOutputStream(StreamPlayer* player);
     };
 
     typedef SSB::soundgroup_t soundgroup_t;
