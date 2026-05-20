@@ -25,8 +25,8 @@
 
 #if defined(ENABLE_PORTAUDIO)
 #include "PortAudioWrapper.h"
-#elif defined(ENABLE_OPENSLES)
-#include "OpenSLESWrapper.h"
+#elif defined(ENABLE_OBOE)
+#include "OboeWrapper.h"
 #elif defined(ENABLE_AUDIOTOOLKIT)
 #include "AudioTbox.h"
 #elif defined(ENABLE_AUDIOUNIT)
@@ -106,8 +106,8 @@ namespace soundsystem {
     {
 #if defined(ENABLE_PORTAUDIO)
         return PortAudio::GetInstance();
-#elif defined(ENABLE_OPENSLES)
-        return OpenSLESWrapper::getInstance();
+#elif defined(ENABLE_OBOE)
+        return OboeWrapper::getInstance();
 #elif defined(ENABLE_AUDIOTOOLKIT)
         return AudioTbox::getInstance();
 #elif defined(ENABLE_AUDIOUNIT)
