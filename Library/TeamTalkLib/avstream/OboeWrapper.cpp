@@ -69,23 +69,13 @@ std::shared_ptr<OboeWrapper> OboeWrapper::getInstance() {
 // ---------------------------------------------------------
 bool OboeWrapper::IsCaptureValid(StreamCapture* capture) {
     std::lock_guard<std::recursive_mutex> g(CaptureLock());
-    std::vector<StreamCapture*> recorders = GetRecorders(1);
-    // برای اطمینان از وجود کپچر در کل سیستم
-    for (auto r : GetRecorders(0)) recorders.push_back(r);
-    for (int i = 0; i < 20; ++i) {
-        auto recs = GetRecorders(i);
-        for(auto r: recs) if(r == capture) return true;
-    }
-    return true; 
+    // استفاده از پوینتر بومی کلاس والد به جای لوپ‌های مکرر فرعی صوتی
+    return static_cast<bool>(GetStream(capture, true, false));
 }
 
 bool OboeWrapper::IsPlayerValid(StreamPlayer* player) {
     std::lock_guard<std::recursive_mutex> g(PlayersLock());
-    for (int i = 0; i < 20; ++i) {
-        auto plays = GetPlayers(i);
-        for(auto p: plays) if(p == player) return true;
-    }
-    return true;
+    return static_cast<bool>(GetStream(player));
 }
 
 void OboeWrapper::SafeRestartInputStream(StreamCapture* capture) {
@@ -113,7 +103,7 @@ void OboeWrapper::SafeRestartOutputStream(StreamPlayer* player) {
         
         CloseOutputStream(player);
         OpenOutputStream(player, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
-        StartStream(player); // بازگردانی کالبک متد والد
+        StartStream(player); 
     }
 }
 
@@ -157,8 +147,6 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     dev.default_samplerate = DEFAULT_SAMPLERATE;
 
     // ثبت دیوایس 0
-    // اندروید از نسخه 7 به بالا نویزگیرهای سخت‌افزاری را درون VoiceCommunication تضمین می‌کند
-    // لذا اعلام قابلیت‌ها به TeamTalk مانع از خطای گزارش عدم پشتیبانی می‌شود.
     dev.features |= SOUNDDEVICEFEATURE_AEC | SOUNDDEVICEFEATURE_AGC | SOUNDDEVICEFEATURE_DENOISE;
     sounddevs[dev.id] = dev;
 
@@ -179,7 +167,6 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
 // INPUT STREAMER (Microphone)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    // عدم استفاده از تخصیص حافظه (بدون resize) برای حفظ گارانتی Real-time
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
@@ -188,7 +175,6 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
         std::memcpy(&fifo_buffer[fifo_size], pcmData, totalIncomingSamples * sizeof(short));
         fifo_size += totalIncomingSamples;
     } else {
-        // جلوگیری از سرریز بافر در صورت قفل شدن تردها بدون کرش مموری
         MYTRACE(ACE_TEXT("Oboe Input: Buffer Overrun avoided.\n"));
     }
 
@@ -251,7 +237,7 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
         builder.setInputPreset(oboe::InputPreset::Unprocessed);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
-        MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Unprocessed, LowLatency, Exclusive\n"));
+        MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Mic preset = Unprocessed, LowLatency, Exclusive\n"));
     } else {
         builder.setInputPreset(oboe::InputPreset::Unprocessed);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -299,7 +285,7 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     std::lock_guard<std::recursive_mutex> g(CaptureLock());
     if (!streamer || !streamer->stream) return false;
 
-    // دریافت درخواست‌های کاربر از رابط کاربری تیم‌تاک به صورت پویا (داینامیک)
+    // خواندن داینامیک وضعیت ویژگی‌های درخواستی تیم‌تاک (AEC, AGC, NS)
     SoundDeviceFeatures features = streamer->recorder->GetCaptureFeatures();
     
     streamer->stream->requestStop();
@@ -314,7 +300,6 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     builder.setDataCallback(streamer.get());
     builder.setErrorCallback(streamer.get());
     
-    // سوییچ اتوماتیک بر اساس درخواست ویژگی‌های پردازشی
     if ((features & SOUNDDEVICEFEATURE_AEC) || (features & SOUNDDEVICEFEATURE_AGC) || (features & SOUNDDEVICEFEATURE_DENOISE)) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -352,16 +337,19 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     while (fifo_size < totalOutgoingSamples && more) {
         more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
         
-        std::shared_ptr<SoundSystem> sndSys = OboeWrapper::getInstance();
-        int mastervol = sndSys->GetMasterVolume(sndgrpid);
-        bool mastermute = sndSys->IsAllMute(sndgrpid);
-        SoftVolume(*this, cb_buffer.data(), framesize, mastervol, mastermute);
+        // استفاده از اشاره‌گر خام جهت دوری از قفل‌های اتمیک Reference Counting کاندید بر روی ترد صوتی
+        OboeWrapper* sndSys = OboeWrapper::getInstance().get();
+        if (sndSys) {
+            int mastervol = sndSys->GetMasterVolume(sndgrpid);
+            bool mastermute = sndSys->IsAllMute(sndgrpid);
+            SoftVolume(*this, cb_buffer.data(), framesize, mastervol, mastermute);
+        }
 
         if (fifo_size + requiredSamples <= fifo_capacity) {
             std::memcpy(&fifo_buffer[fifo_size], cb_buffer.data(), requiredSamples * sizeof(short));
             fifo_size += requiredSamples;
         } else {
-            break; // جلوگیری از سرریز بافر و عدم استفاده از resize در ترد صوتی
+            break; 
         }
     }
 
@@ -398,7 +386,6 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
-    // پیش‌تخصیص ظرفیت بدون resize در حین استریم
     streamer->cb_buffer.resize(framesize * channels);
     streamer->fifo_capacity = samplerate * channels * 2;
     streamer->fifo_buffer.resize(streamer->fifo_capacity, 0);
