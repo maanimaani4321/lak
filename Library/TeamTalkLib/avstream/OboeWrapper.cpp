@@ -31,8 +31,9 @@
 namespace soundsystem {
 
 enum AndroidSoundDevice {
-    DEFAULT_DEVICE_ID  = (0 & SOUND_DEVICEID_MASK),
-    VOICECOM_DEVICE_ID = (1 & SOUND_DEVICEID_MASK),
+    DEFAULT_DEVICE_ID           = (0 & SOUND_DEVICEID_MASK),
+    VOICECOM_DEVICE_ID          = (1 & SOUND_DEVICEID_MASK),
+    GENERIC_PROCESSED_DEVICE_ID = (1380 & SOUND_DEVICEID_MASK), // شناسه انتخابی جدید
 };
 
 constexpr auto DEFAULT_SAMPLERATE = 48000;
@@ -82,7 +83,7 @@ bool OboeWrapper::GetDefaultDevices(SoundAPI sndsys, int& inputdeviceid, int& ou
 
 void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     DeviceInfo dev;
-    dev.devicename = ACE_TEXT("Default sound device (Oboe)");
+    dev.devicename = ACE_TEXT("Default (Raw/High-Sensitivity)");
     dev.soundsystem = SOUND_API_OBOE_ANDROID;
     dev.id = DEFAULT_DEVICE_ID;
     
@@ -99,10 +100,10 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     dev.output_channels.insert(2);
     dev.default_samplerate = DEFAULT_SAMPLERATE;
 
-    // Device 0 for Standard/Media
+    // Device 0: Raw Unprocessed
     sounddevs[dev.id] = dev;
 
-    // Device 1 for Voice Communication (Hardware AEC/NS/AGC)
+    // Device 1: Voice Communication (Hardware AEC/NS/AGC)
     DeviceInfo voicecom_dev = dev;
     voicecom_dev.id = VOICECOM_DEVICE_ID;
     voicecom_dev.devicename = ACE_TEXT("Voice Communication (Hardware AEC/NS)");
@@ -110,29 +111,33 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     voicecom_dev.features |= SOUNDDEVICEFEATURE_AGC;
     voicecom_dev.features |= SOUNDDEVICEFEATURE_DENOISE;
     sounddevs[voicecom_dev.id] = voicecom_dev;
+
+    // Device 1380: Generic Processed (Noise Gate)
+    DeviceInfo generic_dev = dev;
+    generic_dev.id = GENERIC_PROCESSED_DEVICE_ID;
+    generic_dev.devicename = ACE_TEXT("Processed Voice (System Noise Gate)");
+    generic_dev.features |= SOUNDDEVICEFEATURE_DENOISE;
+    sounddevs[generic_dev.id] = generic_dev;
 }
 
 // ---------------------------------------------------------
 // INPUT STREAMER (Microphone)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    // حذف قفل صوتی برای جلوگیری از بن‌بست صوتی هماهنگ با رهنمودهای زمان‌واقعی Oboe
+    // حذف قفل صوتی جهت تضمین عملکرد Real-time و جلوگیری از بن‌بست
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
 
-    // Fast append to static FIFO buffer
     if (fifo_size + totalIncomingSamples > fifo_buffer.size()) {
         fifo_buffer.resize(fifo_size + totalIncomingSamples + (requiredSamples * 2));
     }
     std::memcpy(&fifo_buffer[fifo_size], pcmData, totalIncomingSamples * sizeof(short));
     fifo_size += totalIncomingSamples;
 
-    // Flush standard chunk sizes to TeamTalk
     while (fifo_size >= requiredSamples) {
         recorder->StreamCaptureCb(*this, fifo_buffer.data(), framesize);
         
-        // Shift buffer (RingBuffer behavior)
         fifo_size -= requiredSamples;
         if (fifo_size > 0) {
             std::memmove(&fifo_buffer[0], &fifo_buffer[requiredSamples], fifo_size * sizeof(short));
@@ -159,19 +164,21 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setChannelCount(channels);
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
-    builder.setErrorCallback(streamer.get()); // Register error callback
+    builder.setErrorCallback(streamer.get());
 
-    // فعال‌سازی تبدیل‌های سخت‌افزاری خودکار برای سازگاری کامل با تراشه‌های مختلف
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionAllowed(true);
 
     if (inputdeviceid == VOICECOM_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
-        MYTRACE(ACE_TEXT("Oboe: Mic preset = VoiceCommunication\n"));
-    } else {
+        MYTRACE(ACE_TEXT("Oboe: Mic preset = VoiceCommunication (AEC/NS/AGC enabled)\n"));
+    } else if (inputdeviceid == GENERIC_PROCESSED_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::Generic);
-        MYTRACE(ACE_TEXT("Oboe: Mic preset = Generic\n"));
+        MYTRACE(ACE_TEXT("Oboe: Mic preset = Generic (System Noise Gate)\n"));
+    } else {
+        builder.setInputPreset(oboe::InputPreset::Unprocessed);
+        MYTRACE(ACE_TEXT("Oboe: Mic preset = Unprocessed (Raw High-Sensitivity)\n"));
         if (inputdeviceid != DEFAULT_DEVICE_ID) {
             builder.setDeviceId(inputdeviceid);
             MYTRACE(ACE_TEXT("Oboe: Mic Device ID = %d\n"), inputdeviceid);
@@ -180,11 +187,10 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
 
     oboe::Result result = builder.openStream(streamer->stream);
     
-    // Fallback: If opening chosen hardware device failed, fall back to default (0)
     if (result != oboe::Result::OK && inputdeviceid != DEFAULT_DEVICE_ID) {
         MYTRACE(ACE_TEXT("Oboe: Selected input device %d failed to open (%s). Falling back to default (0).\n"), 
                 inputdeviceid, oboe::convertToText(result));
-        builder.setDeviceId(oboe::kUnspecified); // Reset device selection
+        builder.setDeviceId(oboe::kUnspecified);
         result = builder.openStream(streamer->stream);
     }
 
@@ -226,14 +232,13 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t) {
 // OUTPUT STREAMER (Speaker / Earpiece)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    // حذف قفل صوتی برای جلوگیری از بن‌بست صوتی هماهنگ با رهنمودهای زمان‌واقعی Oboe
+    // حذف قفل صوتی برای جلوگیری از بن‌بست صوتی
     short* outData = static_cast<short*>(audioData);
     int totalOutgoingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
     
     bool more = true;
 
-    // Pull samples from TeamTalk to satisfy the requested frame size
     while (fifo_size < totalOutgoingSamples && more) {
         more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
         
@@ -241,7 +246,6 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         bool mastermute = OboeWrapper::getInstance()->IsAllMute(sndgrpid);
         SoftVolume(*this, cb_buffer.data(), framesize, mastervol, mastermute);
 
-        // Append to our playback FIFO
         if (fifo_buffer.size() < (size_t)(fifo_size + requiredSamples)) {
             fifo_buffer.resize(fifo_size + requiredSamples + (requiredSamples * 2));
         }
@@ -249,17 +253,15 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         fifo_size += requiredSamples;
     }
 
-    // Deliver exact number of samples requested
     int samplesToCopy = std::min(totalOutgoingSamples, fifo_size);
     if (samplesToCopy > 0) {
         std::memcpy(outData, fifo_buffer.data(), samplesToCopy * sizeof(short));
         fifo_size -= samplesToCopy;
         if (fifo_size > 0) {
-            std::memmove(&fifo_buffer[0], &fifo_buffer[samplesToCopy], fifo_size * sizeof(short));
+            std::memmove(&buffer[0], &buffer[samplesToCopy], fifo_size * sizeof(short));
         }
     }
 
-    // Fill the remainder with silence on underflow
     if (samplesToCopy < totalOutgoingSamples) {
         std::memset(outData + samplesToCopy, 0, (totalOutgoingSamples - samplesToCopy) * sizeof(short));
     }
@@ -285,9 +287,8 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setChannelCount(channels);
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
-    builder.setErrorCallback(streamer.get()); // Register error callback
+    builder.setErrorCallback(streamer.get());
 
-    // فعال‌سازی تبدیل‌های سخت‌افزاری خودکار برای سازگاری کامل با تراشه‌های مختلف
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionAllowed(true);
@@ -308,11 +309,10 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
 
     oboe::Result result = builder.openStream(streamer->stream);
 
-    // Fallback: If opening chosen hardware output failed, fall back to default (0)
     if (result != oboe::Result::OK && outputdeviceid != DEFAULT_DEVICE_ID) {
         MYTRACE(ACE_TEXT("Oboe: Selected output device %d failed to open (%s). Falling back to default (0).\n"), 
                 outputdeviceid, oboe::convertToText(result));
-        builder.setDeviceId(oboe::kUnspecified); // Reset device selection
+        builder.setDeviceId(oboe::kUnspecified);
         result = builder.openStream(streamer->stream);
     }
 
