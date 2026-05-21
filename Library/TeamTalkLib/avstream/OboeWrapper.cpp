@@ -68,12 +68,10 @@ std::shared_ptr<OboeWrapper> OboeWrapper::getInstance() {
 // Thread Safe Validation & Reconnect Logic
 // ---------------------------------------------------------
 bool OboeWrapper::IsCaptureValid(StreamCapture* capture) {
-    // SSB::GetStream manages its own locking, no need to lock CaptureLock manually!
     return SSB::GetStream(capture, true, false) != nullptr;
 }
 
 bool OboeWrapper::IsPlayerValid(StreamPlayer* player) {
-    // SSB::GetStream manages its own locking
     return SSB::GetStream(player) != nullptr;
 }
 
@@ -85,7 +83,6 @@ void OboeWrapper::SafeRestartInputStream(StreamCapture* capture) {
         int channels = streamer->channels;
         int framesize = streamer->framesize;
         
-        // These methods handle their own mutex locking inside SoundSystemBase
         SSB::CloseInputStream(capture);
         SSB::OpenInputStream(capture, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
     }
@@ -102,7 +99,6 @@ void OboeWrapper::SafeRestartOutputStream(StreamPlayer* player) {
         SSB::CloseOutputStream(player);
         SSB::OpenOutputStream(player, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
         
-        // Explicit call to base class StartStream to prevent Name Hiding error
         SSB::StartStream(player); 
     }
 }
@@ -167,7 +163,6 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
 // INPUT STREAMER (Microphone)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    // عدم استفاده از تخصیص حافظه (بدون resize) برای حفظ گارانتی Real-time
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
@@ -208,7 +203,6 @@ void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::R
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeInputStreamer>(capture, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, inputdeviceid);
 
-    // پیش‌تخصیص ظرفیت بافر به اندازه 2 ثانیه صدا جهت عدم اجرای resize حین ضبط Real-time
     streamer->fifo_capacity = samplerate * channels * 2;
     streamer->fifo_buffer.resize(streamer->fifo_capacity, 0);
     streamer->fifo_size = 0;
@@ -264,6 +258,8 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
 
 bool OboeWrapper::StartStream(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
+    oboe::StreamState state = streamer->stream->getState();
+    if (state == oboe::StreamState::Started || state == oboe::StreamState::Starting) return true;
     return streamer->stream->requestStart() == oboe::Result::OK;
 }
 
@@ -275,17 +271,17 @@ void OboeWrapper::CloseStream(inputstreamer_t streamer) {
     }
 }
 
+// *** رفع باگ حیاتی *** : حالت Open نیز متوقف حساب می‌شود تا TeamTalk استریم را استارت بزند
 bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return true;
-    return streamer->stream->getState() == oboe::StreamState::Stopped || 
-           streamer->stream->getState() == oboe::StreamState::Closed ||
-           streamer->stream->getState() == oboe::StreamState::Stopping;
+    oboe::StreamState state = streamer->stream->getState();
+    return state != oboe::StreamState::Started && 
+           state != oboe::StreamState::Starting;
 }
 
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
 
-    // خواندن داینامیک وضعیت ویژگی‌های درخواستی تیم‌تاک (AEC, AGC, NS)
     SoundDeviceFeatures features = streamer->recorder->GetCaptureFeatures();
     
     streamer->stream->requestStop();
@@ -337,7 +333,6 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     while (fifo_size < totalOutgoingSamples && more) {
         more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
         
-        // استفاده از اشاره‌گر خام جهت دوری از قفل‌های اتمیک Reference Counting
         OboeWrapper* sndSys = OboeWrapper::getInstance().get();
         if (sndSys) {
             int mastervol = sndSys->GetMasterVolume(sndgrpid);
@@ -362,11 +357,14 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         }
     }
 
+    // اگر صدایی نبود، صفر قرار بده تا Oboe سکوت پخش کند
     if (samplesToCopy < totalOutgoingSamples) {
         std::memset(outData + samplesToCopy, 0, (totalOutgoingSamples - samplesToCopy) * sizeof(short));
     }
 
-    return more ? oboe::DataCallbackResult::Continue : oboe::DataCallbackResult::Stop;
+    // *** رفع باگ بسیار حیاتی خروجی ***
+    // همیشه Continue برگردانید. توقف استریم توسط Oboe باعث از کار افتادن همیشگی آن برای بقیه ویس‌ها می‌شود.
+    return oboe::DataCallbackResult::Continue;
 }
 
 void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) {
@@ -386,7 +384,6 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
-    // پیش‌تخصیص ظرفیت بدون resize در حین استریم
     streamer->cb_buffer.resize(framesize * channels);
     streamer->fifo_capacity = samplerate * channels * 2;
     streamer->fifo_buffer.resize(streamer->fifo_capacity, 0);
@@ -404,6 +401,7 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
+    // *** مپ کردن دقیق ID ها برای اسپیکر همانند میکروفون ***
     if (outputdeviceid == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
@@ -414,11 +412,15 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
         builder.setUsage(oboe::Usage::VoiceCommunication);
         builder.setContentType(oboe::ContentType::Speech);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        MYTRACE(ACE_TEXT("Oboe Playback (VoiceCom 1): Usage = VoiceCommunication\n"));
     } else if (outputdeviceid == GENERIC_PROCESSED_DEVICE_ID) {
+        // برای تضمین پایین‌ترین تأخیر روی ۱۳۸۰
+        builder.setAudioApi(oboe::AudioApi::AAudio);
         builder.setUsage(oboe::Usage::Media);
         builder.setContentType(oboe::ContentType::Music);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
+        MYTRACE(ACE_TEXT("Oboe Playback (NoDelay 1380): Media, LowLatency, Exclusive (AAudio)\n"));
     } else {
         builder.setUsage(oboe::Usage::Media);
         builder.setContentType(oboe::ContentType::Music);
@@ -432,6 +434,8 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
         builder.setDeviceId(oboe::kUnspecified);
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
+        builder.setUsage(oboe::Usage::Media);
+        builder.setContentType(oboe::ContentType::Music);
         result = builder.openStream(streamer->stream);
     }
 
@@ -453,19 +457,25 @@ void OboeWrapper::CloseStream(outputstreamer_t streamer) {
 
 bool OboeWrapper::StartStream(outputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
+    oboe::StreamState state = streamer->stream->getState();
+    if (state == oboe::StreamState::Started || state == oboe::StreamState::Starting) return true;
     return streamer->stream->requestStart() == oboe::Result::OK;
 }
 
 bool OboeWrapper::StopStream(outputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
+    oboe::StreamState state = streamer->stream->getState();
+    if (state == oboe::StreamState::Stopped || state == oboe::StreamState::Stopping || state == oboe::StreamState::Closed) return true;
     return streamer->stream->requestStop() == oboe::Result::OK;
 }
 
+// *** رفع باگ حیاتی *** : TeamTalk با استفاده از این تابع وضعیت را چک می‌کند.
 bool OboeWrapper::IsStreamStopped(outputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return true;
-    return streamer->stream->getState() == oboe::StreamState::Stopped || 
-           streamer->stream->getState() == oboe::StreamState::Closed ||
-           streamer->stream->getState() == oboe::StreamState::Stopping;
+    oboe::StreamState state = streamer->stream->getState();
+    // اگر Started یا Starting نیست، یعنی متوقف شده و TeamTalk باید آن را Start کند
+    return state != oboe::StreamState::Started && 
+           state != oboe::StreamState::Starting;
 }
 
 } // namespace soundsystem
