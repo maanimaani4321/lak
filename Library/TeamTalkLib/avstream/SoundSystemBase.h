@@ -1113,12 +1113,37 @@ namespace soundsystem {
         {
             std::lock_guard<std::recursive_mutex> g(m_devs_lock);
 
-            auto ii = m_sounddevs.find(id & SOUND_DEVICEID_MASK);
+            int real_id = id & SOUND_DEVICEID_MASK;
+
+            auto ii = m_sounddevs.find(real_id);
             if(ii != m_sounddevs.end())
             {
                 dev = ii->second;
                 return true;
             }
+
+        #if defined(ENABLE_OBOE)
+            DeviceInfo dynamic_dev;
+            dynamic_dev.devicename = ACE_TEXT("Android Dynamic Audio Device");
+            dynamic_dev.soundsystem = SOUND_API_OBOE_ANDROID;
+            dynamic_dev.id = real_id;
+            dynamic_dev.max_input_channels = 2;
+            dynamic_dev.max_output_channels = 2;
+            dynamic_dev.input_channels.insert(1);
+            dynamic_dev.input_channels.insert(2);
+            dynamic_dev.output_channels.insert(1);
+            dynamic_dev.output_channels.insert(2);
+            dynamic_dev.default_samplerate = 48000;
+            for (int sr : standardSampleRates) {
+                dynamic_dev.input_samplerates.insert(sr);
+                dynamic_dev.output_samplerates.insert(sr);
+            }
+            m_sounddevs[real_id] = dynamic_dev;
+            dev = dynamic_dev;
+            MYTRACE(ACE_TEXT("Dynamically created DeviceInfo for Android Device ID #%d\n"), real_id);
+            return true;
+        #endif
+
             MYTRACE(ACE_TEXT("Cannot find sound device #%d\n"), id);
             return false;
         }

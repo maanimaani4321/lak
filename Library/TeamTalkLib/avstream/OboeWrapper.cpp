@@ -201,6 +201,14 @@ void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::R
 }
 
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
+    bool useVoiceCom = (inputdeviceid & 0x10000) != 0;
+    bool forceStereo = (inputdeviceid & 0x20000) != 0;
+    int realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
+
+    if (forceStereo) {
+        channels = 2;
+    }
+
     auto streamer = std::make_shared<OboeInputStreamer>(capture, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, inputdeviceid);
 
     streamer->fifo_capacity = samplerate * channels * 2;
@@ -219,29 +227,36 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
-    if (inputdeviceid == DEFAULT_DEVICE_ID) {
+    if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setInputPreset(oboe::InputPreset::Generic);
         MYTRACE(ACE_TEXT("Oboe Input (Default 0): OpenSL ES backend with Generic mic preset\n"));
-    } else if (inputdeviceid == VOICECOM_DEVICE_ID) {
+    } else if (realDeviceId == VOICECOM_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         MYTRACE(ACE_TEXT("Oboe Input (VoiceCom 1): Mic preset = VoiceCommunication\n"));
-    } else if (inputdeviceid == GENERIC_PROCESSED_DEVICE_ID) {
+    } else if (realDeviceId == GENERIC_PROCESSED_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::Camcorder);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
         MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Unprocessed, LowLatency, Exclusive\n"));
     } else {
-        builder.setInputPreset(oboe::InputPreset::Generic);
-        builder.setPerformanceMode(oboe::PerformanceMode::None);
-        builder.setDeviceId(inputdeviceid);
+        if (useVoiceCom) {
+            builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+            builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+            MYTRACE(ACE_TEXT("Oboe Input (Dynamic VoiceCom): Device ID %d\n"), realDeviceId);
+        } else {
+            builder.setInputPreset(oboe::InputPreset::Generic);
+            builder.setPerformanceMode(oboe::PerformanceMode::None);
+            MYTRACE(ACE_TEXT("Oboe Input (Dynamic Generic): Device ID %d\n"), realDeviceId);
+        }
+        builder.setDeviceId(realDeviceId);
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
     
-    if (result != oboe::Result::OK && inputdeviceid != DEFAULT_DEVICE_ID) {
+    if (result != oboe::Result::OK && realDeviceId != DEFAULT_DEVICE_ID) {
         builder.setDeviceId(oboe::kUnspecified);
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
@@ -288,6 +303,9 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     streamer->stream->close();
     streamer->stream.reset();
 
+    bool useVoiceCom = (streamer->inputdeviceid & 0x10000) != 0;
+    int realDeviceId = streamer->inputdeviceid & SOUND_DEVICEID_MASK;
+
     oboe::AudioStreamBuilder builder;
     builder.setDirection(oboe::Direction::Input);
     builder.setFormat(oboe::AudioFormat::I16);
@@ -301,15 +319,19 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         MYTRACE(ACE_TEXT("Oboe: Reconfigured to VoiceCommunication due to requested Dynamic Features.\n"));
     } else {
-        if (streamer->inputdeviceid == DEFAULT_DEVICE_ID) {
+        if (realDeviceId == DEFAULT_DEVICE_ID) {
             builder.setAudioApi(oboe::AudioApi::OpenSLES);
             builder.setPerformanceMode(oboe::PerformanceMode::None);
             builder.setInputPreset(oboe::InputPreset::Generic);
             MYTRACE(ACE_TEXT("Oboe: Reconfigured to Generic (OpenSLES) due to disabled Dynamic Features.\n"));
         } else {
-            builder.setInputPreset(oboe::InputPreset::Unprocessed);
+            if (useVoiceCom) {
+                builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+            } else {
+                builder.setInputPreset(oboe::InputPreset::Unprocessed);
+            }
             builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-            builder.setDeviceId(streamer->inputdeviceid);
+            builder.setDeviceId(realDeviceId);
         }
     }
 
@@ -382,6 +404,14 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 }
 
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
+    bool useVoiceCom = (outputdeviceid & 0x10000) != 0;
+    bool forceStereo = (outputdeviceid & 0x20000) != 0;
+    int realDeviceId = outputdeviceid & SOUND_DEVICEID_MASK;
+
+    if (forceStereo) {
+        channels = 2;
+    }
+
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
     streamer->cb_buffer.resize(framesize * channels);
@@ -402,18 +432,18 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
     // *** مپ کردن دقیق ID ها برای اسپیکر همانند میکروفون ***
-    if (outputdeviceid == DEFAULT_DEVICE_ID) {
+    if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setUsage(oboe::Usage::Media);
         builder.setContentType(oboe::ContentType::Music);
         MYTRACE(ACE_TEXT("Oboe Playback (Default 0): OpenSL ES backend with Media/Music usage\n"));
-    } else if (outputdeviceid == VOICECOM_DEVICE_ID) {
+    } else if (realDeviceId == VOICECOM_DEVICE_ID) {
         builder.setUsage(oboe::Usage::VoiceCommunication);
         builder.setContentType(oboe::ContentType::Speech);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         MYTRACE(ACE_TEXT("Oboe Playback (VoiceCom 1): Usage = VoiceCommunication\n"));
-    } else if (outputdeviceid == GENERIC_PROCESSED_DEVICE_ID) {
+    } else if (realDeviceId == GENERIC_PROCESSED_DEVICE_ID) {
         // برای تضمین پایین‌ترین تأخیر روی ۱۳۸۰
         builder.setAudioApi(oboe::AudioApi::AAudio);
         builder.setUsage(oboe::Usage::Media);
@@ -422,15 +452,23 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
         builder.setSharingMode(oboe::SharingMode::Exclusive);
         MYTRACE(ACE_TEXT("Oboe Playback (NoDelay 1380): Media, LowLatency, Exclusive (AAudio)\n"));
     } else {
-        builder.setUsage(oboe::Usage::Media);
-        builder.setContentType(oboe::ContentType::Music);
-        builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
-        builder.setDeviceId(outputdeviceid);
+        if (useVoiceCom) {
+            builder.setUsage(oboe::Usage::VoiceCommunication);
+            builder.setContentType(oboe::ContentType::Speech);
+            builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+            MYTRACE(ACE_TEXT("Oboe Output (Dynamic VoiceCom): Device ID %d\n"), realDeviceId);
+        } else {
+            builder.setUsage(oboe::Usage::Media);
+            builder.setContentType(oboe::ContentType::Music);
+            builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+            MYTRACE(ACE_TEXT("Oboe Output (Dynamic Media): Device ID %d\n"), realDeviceId);
+        }
+        builder.setDeviceId(realDeviceId);
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
 
-    if (result != oboe::Result::OK && outputdeviceid != DEFAULT_DEVICE_ID) {
+    if (result != oboe::Result::OK && realDeviceId != DEFAULT_DEVICE_ID) {
         builder.setDeviceId(oboe::kUnspecified);
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
