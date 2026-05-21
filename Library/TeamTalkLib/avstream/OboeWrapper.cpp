@@ -234,7 +234,7 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
         builder.setSharingMode(oboe::SharingMode::Exclusive);
         MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Unprocessed, LowLatency, Exclusive\n"));
     } else {
-        builder.setInputPreset(oboe::InputPreset::Camcorder);
+        builder.setInputPreset(oboe::InputPreset::Generic);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setDeviceId(inputdeviceid);
     }
