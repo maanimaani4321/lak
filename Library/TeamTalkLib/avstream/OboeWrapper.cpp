@@ -84,7 +84,6 @@ void OboeWrapper::SafeRestartInputStream(StreamCapture* capture) {
         int framesize = streamer->framesize;
         
         SSB::CloseInputStream(capture);
-        // اصلاح این بخش: به جای استفاده از مقدار ثابت DEFAULT_DEVICE_ID، از آیدی ترکیبی اصلی استریمر استفاده می‌شود
         SSB::OpenInputStream(capture, streamer->inputdeviceid, sndgrpid, samplerate, channels, framesize);
     }
 }
@@ -98,7 +97,6 @@ void OboeWrapper::SafeRestartOutputStream(StreamPlayer* player) {
         int framesize = streamer->framesize;
         
         SSB::CloseOutputStream(player);
-        // اصلاح این بخش: به جای استفاده از مقدار ثابت DEFAULT_DEVICE_ID، از آیدی ترکیبی اصلی استریمر استفاده می‌شود
         SSB::OpenOutputStream(player, streamer->outputdeviceid, sndgrpid, samplerate, channels, framesize);
         
         SSB::StartStream(player); 
@@ -190,16 +188,9 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
 
 void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) {
     MYTRACE(ACE_TEXT("Oboe Input Stream closed. Error: %s\n"), oboe::convertToText(error));
-    if (error == oboe::Result::ErrorDisconnected) {
-        StreamCapture* cachedRecorder = this->recorder;
-        std::thread([cachedRecorder]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            std::shared_ptr<OboeWrapper> sndSys = OboeWrapper::getInstance();
-            if (sndSys && sndSys->IsCaptureValid(cachedRecorder)) {
-                sndSys->SafeRestartInputStream(cachedRecorder);
-            }
-        }).detach();
-    }
+    // رفع باگ هنگ کردن کلاینت:
+    // جاوا فرآیند بازسازی صوتی را به صورت بسیار پایدار از طریق متد‌های reinitialize هماهنگ می‌کند.
+    // جهت جلوگیری از تداخل موازی ترد صوتی C++ با ترد لایه جاوا (Race Condition)، از اجرای مجدد SafeRestart صوتی در اینجا خودداری می‌کنیم.
 }
 
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
@@ -207,9 +198,15 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
     int realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
 
+    // رفع باگ مونو/استریو:
+    // فرمت‌های مونو/استریو به صورت داخلی توسط Oboe کنترل می‌شوند.
+    // اجبار استریم به ۲ کانال (Stereo) در لایه سخت‌افزار در زمان‌هایی که فلو و انکودر تیم‌تاک روی ۱ کانال (Mono) ست شده‌اند،
+    // به علت عدم تشکیل رساپلر در لایه بالایی تیم‌تاک، باعث تولید صدای نامفهوم و دور کند می‌شد.
+    /*
     if (forceStereo) {
         channels = 2;
     }
+    */
 
     auto streamer = std::make_shared<OboeInputStreamer>(capture, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, inputdeviceid);
 
@@ -232,7 +229,6 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
-        // اصلاح این بخش: در صورتی که دیوایس پیش‌فرض (0) به همراه فلگ useVoiceCom فرستاده شده باشد، حالت ضبط مکالمه فعال می‌شود
         if (useVoiceCom) {
             builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
             MYTRACE(ACE_TEXT("Oboe Input (Default 0): OpenSL ES backend with VoiceCommunication mic preset\n"));
@@ -395,16 +391,8 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
 
 void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) {
     MYTRACE(ACE_TEXT("Oboe Output Stream closed. Error: %s\n"), oboe::convertToText(error));
-    if (error == oboe::Result::ErrorDisconnected) {
-        StreamPlayer* cachedPlayer = this->player;
-        std::thread([cachedPlayer]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            std::shared_ptr<OboeWrapper> sndSys = OboeWrapper::getInstance();
-            if (sndSys && sndSys->IsPlayerValid(cachedPlayer)) {
-                sndSys->SafeRestartOutputStream(cachedPlayer);
-            }
-        }).detach();
-    }
+    // رفع باگ هنگ کردن کلاینت:
+    // مدیریت بازسازی توسط جاوا انجام می‌شود. برای جلوگیری از تداخل و ایجاد تکرار، عملیات SafeRestart در اینجا حذف گردید.
 }
 
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
@@ -412,9 +400,15 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     bool forceStereo = (outputdeviceid & 0x20000) != 0;
     int realDeviceId = outputdeviceid & SOUND_DEVICEID_MASK;
 
+    // رفع باگ مونو/استریو:
+    // فرمت‌های مونو/استریو به صورت داخلی توسط Oboe کنترل می‌شوند.
+    // اجبار استریم به ۲ کانال (Stereo) در لایه سخت‌افزار در زمان‌هایی که پخش صدای کلاینت روی ۱ کانال (Mono) ست شده است،
+    // باعث تداخل فرکانسی و بافر می‌شد.
+    /*
     if (forceStereo) {
         channels = 2;
     }
+    */
 
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
@@ -438,7 +432,6 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
-        // اصلاح این بخش: اگر دیوایس پیش‌فرض (0) به همراه پرچم useVoiceCom فعال باشد، از حالت مکالمه صوتی در اسپیکر استفاده می‌شود
         if (useVoiceCom) {
             builder.setUsage(oboe::Usage::VoiceCommunication);
             builder.setContentType(oboe::ContentType::Speech);
