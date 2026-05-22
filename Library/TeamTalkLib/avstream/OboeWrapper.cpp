@@ -84,7 +84,8 @@ void OboeWrapper::SafeRestartInputStream(StreamCapture* capture) {
         int framesize = streamer->framesize;
         
         SSB::CloseInputStream(capture);
-        SSB::OpenInputStream(capture, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
+        // اصلاح این بخش: به جای استفاده از مقدار ثابت DEFAULT_DEVICE_ID، از آیدی ترکیبی اصلی استریمر استفاده می‌شود
+        SSB::OpenInputStream(capture, streamer->inputdeviceid, sndgrpid, samplerate, channels, framesize);
     }
 }
 
@@ -97,7 +98,8 @@ void OboeWrapper::SafeRestartOutputStream(StreamPlayer* player) {
         int framesize = streamer->framesize;
         
         SSB::CloseOutputStream(player);
-        SSB::OpenOutputStream(player, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
+        // اصلاح این بخش: به جای استفاده از مقدار ثابت DEFAULT_DEVICE_ID، از آیدی ترکیبی اصلی استریمر استفاده می‌شود
+        SSB::OpenOutputStream(player, streamer->outputdeviceid, sndgrpid, samplerate, channels, framesize);
         
         SSB::StartStream(player); 
     }
@@ -230,8 +232,14 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
-        builder.setInputPreset(oboe::InputPreset::Generic);
-        MYTRACE(ACE_TEXT("Oboe Input (Default 0): OpenSL ES backend with Generic mic preset\n"));
+        // اصلاح این بخش: در صورتی که دیوایس پیش‌فرض (0) به همراه فلگ useVoiceCom فرستاده شده باشد، حالت ضبط مکالمه فعال می‌شود
+        if (useVoiceCom) {
+            builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
+            MYTRACE(ACE_TEXT("Oboe Input (Default 0): OpenSL ES backend with VoiceCommunication mic preset\n"));
+        } else {
+            builder.setInputPreset(oboe::InputPreset::Generic);
+            MYTRACE(ACE_TEXT("Oboe Input (Default 0): OpenSL ES backend with Generic mic preset\n"));
+        }
     } else if (realDeviceId == VOICECOM_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -286,7 +294,6 @@ void OboeWrapper::CloseStream(inputstreamer_t streamer) {
     }
 }
 
-// *** رفع باگ حیاتی *** : حالت Open نیز متوقف حساب می‌شود تا TeamTalk استریم را استارت بزند
 bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return true;
     oboe::StreamState state = streamer->stream->getState();
@@ -379,13 +386,10 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         }
     }
 
-    // اگر صدایی نبود، صفر قرار بده تا Oboe سکوت پخش کند
     if (samplesToCopy < totalOutgoingSamples) {
         std::memset(outData + samplesToCopy, 0, (totalOutgoingSamples - samplesToCopy) * sizeof(short));
     }
 
-    // *** رفع باگ بسیار حیاتی خروجی ***
-    // همیشه Continue برگردانید. توقف استریم توسط Oboe باعث از کار افتادن همیشگی آن برای بقیه ویس‌ها می‌شود.
     return oboe::DataCallbackResult::Continue;
 }
 
@@ -431,20 +435,25 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
 
-    // *** مپ کردن دقیق ID ها برای اسپیکر همانند میکروفون ***
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
         builder.setPerformanceMode(oboe::PerformanceMode::None);
-        builder.setUsage(oboe::Usage::Media);
-        builder.setContentType(oboe::ContentType::Music);
-        MYTRACE(ACE_TEXT("Oboe Playback (Default 0): OpenSL ES backend with Media/Music usage\n"));
+        // اصلاح این بخش: اگر دیوایس پیش‌فرض (0) به همراه پرچم useVoiceCom فعال باشد، از حالت مکالمه صوتی در اسپیکر استفاده می‌شود
+        if (useVoiceCom) {
+            builder.setUsage(oboe::Usage::VoiceCommunication);
+            builder.setContentType(oboe::ContentType::Speech);
+            MYTRACE(ACE_TEXT("Oboe Playback (Default 0): OpenSL ES backend with VoiceCommunication usage\n"));
+        } else {
+            builder.setUsage(oboe::Usage::Media);
+            builder.setContentType(oboe::ContentType::Music);
+            MYTRACE(ACE_TEXT("Oboe Playback (Default 0): OpenSL ES backend with Media/Music usage\n"));
+        }
     } else if (realDeviceId == VOICECOM_DEVICE_ID) {
         builder.setUsage(oboe::Usage::VoiceCommunication);
         builder.setContentType(oboe::ContentType::Speech);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         MYTRACE(ACE_TEXT("Oboe Playback (VoiceCom 1): Usage = VoiceCommunication\n"));
     } else if (realDeviceId == GENERIC_PROCESSED_DEVICE_ID) {
-        // برای تضمین پایین‌ترین تأخیر روی ۱۳۸۰
         builder.setAudioApi(oboe::AudioApi::AAudio);
         builder.setUsage(oboe::Usage::Media);
         builder.setContentType(oboe::ContentType::Music);
@@ -507,11 +516,9 @@ bool OboeWrapper::StopStream(outputstreamer_t streamer) {
     return streamer->stream->requestStop() == oboe::Result::OK;
 }
 
-// *** رفع باگ حیاتی *** : TeamTalk با استفاده از این تابع وضعیت را چک می‌کند.
 bool OboeWrapper::IsStreamStopped(outputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return true;
     oboe::StreamState state = streamer->stream->getState();
-    // اگر Started یا Starting نیست، یعنی متوقف شده و TeamTalk باید آن را Start کند
     return state != oboe::StreamState::Started && 
            state != oboe::StreamState::Starting;
 }
