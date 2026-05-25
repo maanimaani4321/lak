@@ -43,6 +43,8 @@
 
 #if defined(ENABLE_MEDIAFOUNDATION)
 #include "avstream/MFTransform.h"
+#elif defined(ENABLE_LAME)
+#include "codec/LameEncoder.h"
 #endif
 
 #if defined(ENABLE_OGG)
@@ -129,6 +131,8 @@ namespace teamtalk {
         wavepcmfile_t m_wavfile;
 #if defined(ENABLE_MEDIAFOUNDATION)
         mftransform_t m_mp3transform;
+#elif defined(ENABLE_LAME)
+        lame_encoder_t m_lameencoder;
 #endif
 #if defined(ENABLE_OGG) && defined(ENABLE_SPEEX)
         speexfile_t m_speexfile;
