@@ -3,7 +3,7 @@
 
 #include "codec/MediaUtil.h"
 #include "myace/MyACE.h"
-#include <lame/lame.h>
+#include <lame.h>
 #include <memory>
 #include <vector>
 
