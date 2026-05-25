@@ -140,7 +140,7 @@ private:
 #if defined(ENABLE_MEDIAFOUNDATION)
     mftransform_t m_mp3encoder;
 #elif defined(ENABLE_LAME)
-    lame_encoder_t m_mp3encoder;
+    teamtalk::lame_encoder_t m_mp3encoder;
 #endif
 
 #if defined(ENABLE_SPEEXFILE)

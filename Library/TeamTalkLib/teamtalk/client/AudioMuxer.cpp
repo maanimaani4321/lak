@@ -215,7 +215,7 @@ bool AudioMuxer::SaveFile(const teamtalk::AudioCodec& codec,
 #elif defined(ENABLE_LAME)
         int mp3bitrate = AFFToMP3Bitrate(aff);
         media::AudioFormat fmt(samplerate, channels);
-        m_mp3encoder = LameEncoder::CreateMP3(fmt, mp3bitrate, filename);
+        m_mp3encoder = teamtalk::LameEncoder::CreateMP3(fmt, mp3bitrate, filename);
         success = bool(m_mp3encoder);
 #endif
     }
