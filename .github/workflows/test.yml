@@ -42,8 +42,10 @@ jobs:
           sudo mkdir -p /cpython-install/lib/python3.10
           sudo ln -s /cpython-install/Lib/* /cpython-install/lib/python3.10/ || true
           
+                    sudo cp ${{ github.workspace }}/omvll_config.py /cpython-install/lib/python3.10/
+          
           echo "Final check of the paths:"
-          ls -l /cpython-install/lib/python3.10/encodings/__init__.py
+          ls -l /cpython-install/lib/python3.10/omvll_config.py
 
       - name: setup_ndk
         uses: nttld/setup-ndk@v1
