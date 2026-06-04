@@ -28,6 +28,11 @@ jobs:
           find . -name "omvll-ndk.so" -exec cp {} . \;
           chmod +x omvll-ndk.so
           ls -l omvll-ndk.so
+          
+          sudo mkdir -p /cpython-install
+          sudo cp -r Python-3.10.7/* /cpython-install/
+          
+          sudo chmod -R 755 /cpython-install
 
       - name: setup_ndk
         uses: nttld/setup-ndk@v1
