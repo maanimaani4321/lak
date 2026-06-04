@@ -1,0 +1,55 @@
+name: Android v8 Obfuscated Build
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout_code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: install_dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full pkg-config wget python3
+
+      - name: Download and Setup Obfuscated NDK
+        run: |
+          echo "Downloading Custom OLLVM NDK..."
+         
+          wget https://github.com/amimo/ollvm-ndk/releases/download/ndk-r25c-ollvm/android-ndk-r25c-ollvm-linux.tar.xz
+          tar -xf android-ndk-r25c-ollvm-linux.tar.xz
+          echo "CUSTOM_NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r25c-ollvm" >> $GITHUB_ENV
+
+      
+      - name: build_sdk_v8
+        working-directory: ${{github.workspace}}/Build
+        run: |
+          
+          make android-arm64-v8a
+        env:
+          
+          ANDROID_NDK_HOME: ${{ env.CUSTOM_NDK_PATH }}
+
+      - name: export_artifacts
+        if: always()
+        run: |
+          mkdir -p final_output/binaries
+          mkdir -p final_output/dependencies
+          
+          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
+          
+          mkdir -p final_output/teamtalk_headers
+          find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
+
+      - name: upload_results
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeamTalk-v8-Obfuscated-Package
+          path: final_output/
