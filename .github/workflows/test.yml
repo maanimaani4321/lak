@@ -1,4 +1,4 @@
-name: Android v8 Obfuscated Build
+name: Android v8 Secure (O-MVLL)
 
 on:
   push:
@@ -17,33 +17,34 @@ jobs:
       - name: install_dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full pkg-config wget python3
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full pkg-config wget python3 python3-pip
+          pip3 install pyelftools --break-system-packages
 
-      - name: Download and Setup Obfuscated NDK
+      - name: Download O-MVLL Plugin
         run: |
-          echo "Downloading Custom OLLVM NDK..."
-         
-          wget https://github.com/amimo/ollvm-ndk/releases/download/ndk-r25c-ollvm/android-ndk-r25c-ollvm-linux.tar.xz
-          tar -xf android-ndk-r25c-ollvm-linux.tar.xz
-          echo "CUSTOM_NDK_PATH=$GITHUB_WORKSPACE/android-ndk-r25c-ollvm" >> $GITHUB_ENV
+          wget https://github.com/open-obfuscator/o-mvll/releases/download/v1.6.0/omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
+          tar -xzf omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
+          find . -name "omvll-ndk.so" -exec cp {} . \;
+          chmod +x omvll-ndk.so
 
-      
+      - name: setup_ndk
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          
-          make android-arm64-v8a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" android-arm64-v8a
         env:
-          
-          ANDROID_NDK_HOME: ${{ env.CUSTOM_NDK_PATH }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: export_artifacts
         if: always()
         run: |
           mkdir -p final_output/binaries
-          mkdir -p final_output/dependencies
-          
-          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
+          find Build/ -name "*.so" -exec cp {} final_output/binaries/ \; || true
           
           mkdir -p final_output/teamtalk_headers
           find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
@@ -51,5 +52,5 @@ jobs:
       - name: upload_results
         uses: actions/upload-artifact@v4
         with:
-          name: TeamTalk-v8-Obfuscated-Package
+          name: TeamTalk-v8-Secure-Package
           path: final_output/
