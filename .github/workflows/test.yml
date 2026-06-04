@@ -20,13 +20,6 @@ jobs:
           sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full pkg-config wget python3 python3-pip
           pip3 install pyelftools --break-system-packages
 
-      - name: Download O-MVLL Plugin
-        run: |
-          wget https://github.com/open-obfuscator/o-mvll/releases/download/v1.6.0/omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
-          tar -xzf omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
-          find . -name "omvll-ndk.so" -exec cp {} . \;
-          chmod +x omvll-ndk.so
-
       - name: setup_ndk
         uses: nttld/setup-ndk@v1
         id: setup-ndk
