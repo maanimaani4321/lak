@@ -64,7 +64,9 @@ jobs:
         if: always()
         run: |
           mkdir -p final_output/binaries
-          find Build/ -name "*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
+          mkdir -p final_output/dependencies
+          
+          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
           
           mkdir -p final_output/teamtalk_headers
           find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
@@ -72,5 +74,5 @@ jobs:
       - name: upload_results
         uses: actions/upload-artifact@v4
         with:
-          name: TeamTalk-v8-Secure-Standard
+          name: TeamTalk-v8-Offline-Package
           path: final_output/
