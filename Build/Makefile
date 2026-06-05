@@ -34,7 +34,7 @@ android-build:
 	fi; \
 	$(MAKE) CONFIGTYPE=$(CONFIGTYPE) \
         CMAKE_EXTRA+="-DCMAKE_TOOLCHAIN_FILE=$(ANDROID_NDK_HOME)/build/cmake/android.toolchain.cmake \
-        -DCMAKE_CXX_FLAGS='-fpass-plugin=$(OMVLL_LIB) -DOMVLL_CONFIG=$(OMVLL_CONFIG) -fvisibility=hidden -fvisibility-inlines-hidden -O3' \
+        -DCMAKE_CXX_FLAGS='-fpass-plugin=$(OMVLL_LIB) -DOMVLL_CONFIG=$(OMVLL_CONFIG) -fvisibility=hidden -fvisibility-inlines-hidden -O2' \
         -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DANDROID_ABI=$(ANDROID_ABI) \
