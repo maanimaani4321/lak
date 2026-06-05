@@ -16,6 +16,8 @@ class MyConfig(omvll.ObfuscationConfig):
                 "audiocontainer", 
                 "streamhandler", 
                 "audiomuxer",
+                "MyStd",
+                "OggFileIO",
                 "build/"
             ]
             if any(f in path for f in black_list):
