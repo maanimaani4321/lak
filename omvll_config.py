@@ -13,7 +13,7 @@ class MyConfig(omvll.ObfuscationConfig):
             black_list = [
                 "packetlayout", "packethelper", "audiocontainer", 
                 "streamhandler", "audiomuxer", "mystd", "oggfileio",
-                "teamtalk/server/", "build/"
+                "servernode", "serveruser", "build/"
             ]
             if any(f in path for f in black_list):
                 return False
