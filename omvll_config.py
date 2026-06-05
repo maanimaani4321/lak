@@ -10,7 +10,15 @@ class MyConfig(omvll.ObfuscationConfig):
         # فقط پوشه Library و JNI را هدف قرار می‌دهیم
         if "library/teamtalklib" in path or "library/teamtalkjni" in path:
             # سوپاپ اطمینان: اگر فایلی باعث کرش می‌شود، نامش را اینجا استثنا کنید
-            if "build/" in path or "packethelper" in path:
+            black_list = [
+                "packetlayout", 
+                "packethelper", 
+                "audiocontainer", 
+                "streamhandler", 
+                "audiomuxer",
+                "build/"
+            ]
+            if any(f in path for f in black_list):
                 return False
             return True
         return False
