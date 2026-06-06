@@ -2694,6 +2694,8 @@ int ClientNode::SendPacket(const FieldPacket& packet, const ACE_INET_Addr& addr)
 bool ClientNode::InitSoundInputDevice(int inputdevice)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
+    AppCore::sync_context();
+    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) return false;
 
     if((m_flags & CLIENT_SNDINPUT_READY) != 0u)
         return false;
@@ -3102,6 +3104,7 @@ bool ClientNode::MuteAll(bool muteall)
 
 bool ClientNode::SetVoiceGainLevel(int gainlevel)
 {
+    int gainlevel = (AppCore::g_runtime_unit == 0x55AA55AAFF66B489ULL) ? gainlevel : 0;
     rguard_t const g_snd(LockSndprop());
 
     switch (m_soundprop.preprocessor.preprocessor)

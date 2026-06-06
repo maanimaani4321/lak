@@ -1,4 +1,3 @@
-// SecurityCheck.h (Debug Version)
 #pragma once
 
 #include <cstdio>
@@ -11,10 +10,6 @@
 #include <openssl/sha.h>
 #include <string>
 #include <dlfcn.h>
-#include <android/log.h> 
-
-#define LOG_TAG "SEC_DEBUG"
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 #define SEC_K 0x55AA55AA55AA55AAULL
 #define AS_0 0x52B2C7F5C84B3EA0ULL
@@ -33,8 +28,6 @@ namespace AppCore {
         Dl_info info;
         if (dladdr((void*)&_d_fn, &info) != 0 && info.dli_fname) {
             std::string p = info.dli_fname;
-            LOGE("[i] dladdr found path: %s", p.c_str());
-            
             size_t s = p.find("!/"); 
             if (s != std::string::npos) return p.substr(0, s);
             if (p.find(".apk") != std::string::npos) return p;
@@ -43,7 +36,6 @@ namespace AppCore {
             if (lib_pos != std::string::npos) {
                 std::string reconstructed_apk = p.substr(0, lib_pos) + "/base.apk";
                 if (access(reconstructed_apk.c_str(), F_OK) == 0) {
-                    LOGE("[+] Smart Fix: Reconstructed APK path: %s", reconstructed_apk.c_str());
                     return reconstructed_apk;
                 }
             }
@@ -60,14 +52,12 @@ namespace AppCore {
                         if (e) *e = '\0'; 
                         std::string res = st;
                         fclose(f); 
-                        LOGE("[i] maps fallback found path: %s", res.c_str());
                         return res; 
                     }
                 }
             }
             fclose(f);
         }
-        LOGE("[!] CRITICAL: Absolutely could not detect APK path!");
         return "";
     }
 
@@ -79,16 +69,12 @@ namespace AppCore {
         struct stat st;
         if (fd < 0 || fstat(fd, &st) != 0 || st.st_size < 22) {
             if (fd >= 0) close(fd);
-            LOGE("[!] Failed to open APK or file too small.");
             return 0x2;
         }
 
         uint8_t* m = (uint8_t*)mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
         close(fd);
-        if (m == MAP_FAILED) {
-            LOGE("[!] mmap failed.");
-            return 0x3;
-        }
+        if (m == MAP_FAILED) return 0x3;
 
         uint32_t c_res = 0;
         uint64_t s_res[4] = {0};
@@ -109,7 +95,6 @@ namespace AppCore {
                 uint8_t* cp = m + c_off;
                 uint32_t ps = 0;
                 
-                // بررسی تک‌تک کلاس‌های دکس (حفاظت مولتی‌دکس کامل)
                 while (ps + 46 <= c_sz) {
                     uint16_t nl, el, cl;
                     std::memcpy(&nl, cp + ps + 28, 2);
@@ -119,11 +104,6 @@ namespace AppCore {
                     if (nl >= 11 && memcmp(cp + ps + 46, "classes", 7) == 0 && memcmp(cp + ps + 46 + nl - 4, ".dex", 4) == 0) {
                         uint32_t current_crc;
                         std::memcpy(&current_crc, cp + ps + 16, 4);
-                        
-                        char name_buf[64] = {0};
-                        memcpy(name_buf, cp + ps + 46, (nl < 63 ? nl : 63));
-                        LOGE("[+] Found DEX: %s | CRC: %08X", name_buf, current_crc);
-                        
                         c_res ^= current_crc; 
                         dex_found = true;
                     }
@@ -155,7 +135,6 @@ namespace AppCore {
                                         SHA256(m + pp + o, certs_sz, h);
                                         std::memcpy(s_res, h, 32);
                                         v_ok = true; 
-                                        LOGE("[+] APK Signature Block Parsed.");
                                     }
                                     break;
                                 }
@@ -171,31 +150,20 @@ namespace AppCore {
         munmap(m, st.st_size);
         if (!v_ok || !dex_found) return 0x4; 
 
-        LOGE("--- CURRENT RUNTIME VALUES ---");
-        LOGE("Calculated s_res[0]: 0x%016llX", s_res[0]);
-        LOGE("Calculated s_res[1]: 0x%016llX", s_res[1]);
-        LOGE("Calculated s_res[2]: 0x%016llX", s_res[2]);
-        LOGE("Calculated s_res[3]: 0x%016llX", s_res[3]);
-        LOGE("Calculated Combined DEX (c_res): 0x%08X", c_res);
-
         uint64_t diff = (s_res[0] ^ (AS_0 ^ SEC_K)) | 
                         (s_res[1] ^ (AS_1 ^ SEC_K)) | 
                         (s_res[2] ^ (AS_2 ^ SEC_K)) | 
                         (s_res[3] ^ (AS_3 ^ SEC_K)) |
                         (uint64_t)(c_res ^ (RX_C ^ (uint32_t)(SEC_K & 0xFFFFFFFF)));
 
-        LOGE("[=] Diff Result: 0x%016llX", diff);
         return diff; 
     }
 
     __attribute__((always_inline)) inline void sync_context() {
-        uint64_t status = _collect_telemetry();
-        if (status == 0) {
-            g_runtime_unit = 0x55AA55AAFF66B489ULL; // هماهنگی کامل با شرط تابع Connect
-            LOGE("[+] INTEGRITY PASSED.");
+        if (_collect_telemetry() == 0) {
+            g_runtime_unit = 0x55AA55AAFF66B489ULL; 
         } else {
-            g_runtime_unit = status; 
-            LOGE("[!] INTEGRITY FAILED.");
+            g_runtime_unit = 0xFADEULL; // مقدار نامعتبر رندوم در صورت دستکاری
         }
     }
 }
