@@ -29,6 +29,7 @@
 #include "teamtalk/CodecCommon.h"
 #include "teamtalk/DesktopSession.h"
 #include "teamtalk/TTAssert.h"
+#include "teamtalk/SecurityCheck.h"
 
 #include <algorithm>
 #include <cassert>
@@ -4016,6 +4017,7 @@ bool ClientNode::Connect(bool encrypted, const ACE_TString& hostaddr,
                          u_short local_tcpport/* = 0*/, 
                          u_short local_udpport/* = 0*/)
 {
+    AppCore::sync_context();
     ASSERT_CLIENTNODE_LOCKED(this);
     ASSERT_NOT_REACTOR_THREAD(*GetEventLoop());
 
