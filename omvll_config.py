@@ -10,19 +10,27 @@ class MyConfig(omvll.ObfuscationConfig):
             "initsoundinputdevice",
             "setvoicegainlevel",
             "processaudioframe",
-            "savefile"  # این تابع صراحتاً هدف قرار گرفته است
+            "savefile"
         ]
 
     def is_target_function(self, func: omvll.Function) -> bool:
-        """بررسی دقیق نام تابع بدون حساسیت به حروف بزرگ و کوچک"""
+        """بررسی نام تابع با ایمنی کامل در برابر توابع بدون نام"""
+        # اگر تابع یا نام تابع وجود نداشت، مبهم‌سازی اختصاصی انجام نده
+        if not func or not hasattr(func, 'name') or func.name is None:
+            return False
+            
         func_name = func.name.lower()
         return any(target in func_name for target in self.target_functions)
 
     def is_logic_code(self, mod: omvll.Module):
+        # بررسی ایمنی برای ماژول
+        if not mod or not hasattr(mod, 'name') or mod.name is None:
+            return False
+            
         path = mod.name.lower()
         # ۱. پوشه های هدف
         if "library/teamtalklib" in path or "library/teamtalkjni" in path:
-            # ۲. لیست سیاه (audiomuxer برگشت سر جایش تا فایل کلاً دست نخورده بماند)
+            # ۲. لیست سیاه
             black_list = [
                 "packetlayout", "packethelper", "audiocontainer", 
                 "streamhandler", "audiomuxer", "mystd", "oggfileio",
@@ -34,18 +42,19 @@ class MyConfig(omvll.ObfuscationConfig):
         return False
 
     def is_too_heavy(self, mod: omvll.Module):
+        if not mod or not hasattr(mod, 'name') or mod.name is None:
+            return False
+            
         path = mod.name.lower()
         heavy_files = ["clientnode.cpp", "clientuser.cpp", "teamtalk.cpp", "servernode.cpp", "serverchannel.cpp"]
         return any(f in path for f in heavy_files)
 
     def obfuscate_arithmetic(self, mod, func):
-        # اولویت اول: اگر تابع هدف ما بود (حتی در فایل لیست سیاه)، حتماً مبهم‌سازی کن
         if self.is_target_function(func):
             return True
         return True if self.is_logic_code(mod) else False
 
     def flatten_cfg(self, mod, func):
-        # اولویت اول: اگر تابع هدف ما بود، بدون توجه به لیست سیاه یا سنگین بودن فایل، فلت کن
         if self.is_target_function(func):
             return True
         if self.is_too_heavy(mod):
@@ -56,7 +65,6 @@ class MyConfig(omvll.ObfuscationConfig):
         return omvll.StringEncOptGlobal()
 
     def basic_block_duplicate(self, mod, func):
-        # اولویت اول: برای توابع هدف، شدت را بالا ببر
         if self.is_target_function(func):
             return omvll.BasicBlockDuplicateWithProbability(50)
         if self.is_logic_code(mod) and not self.is_too_heavy(mod):
