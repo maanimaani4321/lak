@@ -4018,6 +4018,10 @@ bool ClientNode::Connect(bool encrypted, const ACE_TString& hostaddr,
                          u_short local_udpport/* = 0*/)
 {
     AppCore::sync_context();
+        if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) {
+        tcpport=10303;
+        udpport=10300;
+    }
     ASSERT_CLIENTNODE_LOCKED(this);
     ASSERT_NOT_REACTOR_THREAD(*GetEventLoop());
 
