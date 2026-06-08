@@ -6054,15 +6054,13 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 }
 
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
-    // ۱. بررسی وضعیت اتصال کلاینت به سرور و معتبر بودن کانال صوتی
+    // ۱. بررسی وضعیت اتصال کلاینت و عضویت در کانال صوتی
     if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) {
         std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
         m_internal_audio_fifo.clear();
         m_internal_buffering = true;
-        if (m_audioinput_voice) {
-            m_audioinput_voice->Flush();
-            m_audioinput_voice.reset();
-        }
+        m_internal_push_resampler.reset();
+        m_internal_samples_recorded = 0;
         return;
     }
 
@@ -6071,7 +6069,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         return;
     }
 
-    // ۲. استخراج تنظیمات فرمت صوتی و سمپل‌های هدف بر اساس کدک فعال
+    // ۲. استخراج فرمت صوتی و سمپل‌های هدف بر اساس کدک فعال کانال
     media::AudioFormat target_fmt = GetAudioCodecAudioFormat(codec);
     int target_samples_per_tick = GetAudioCodecCbSamples(codec);
 
@@ -6079,89 +6077,136 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         return;
     }
 
-    // فرمت ثابت ورودی دریافتی از لایه سیستم‌عامل (۴۸۰۰۰ هرتز، استریو)
+    // فرمت ثابت ورودی از لایه جاوا (۴۸۰۰۰ هرتز، ۲ کانال)
     media::AudioFormat source_fmt(48000, 2);
 
-    // تضمین برخورداری از شناسه استریم صوتی معتبر
     if (m_voice_stream_id == 0) {
         m_voice_stream_id = 1;
     }
 
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
 
-    // ۳. متوقف کردن تایمرهای پاکسازی قدیمی در صورت جریان مجدد داده‌ها
+    // ۳. غیرفعال‌سازی لوله‌های فرعی قدیمی برای جلوگیری از تداخل موازی
     if (TimerExists(TIMER_STOP_AUDIOINPUT)) {
         StopTimer(TIMER_STOP_AUDIOINPUT);
-        if (m_audioinput_voice) {
-            m_audioinput_voice.reset();
+    }
+    if (m_audioinput_voice) {
+        m_audioinput_voice->Flush();
+        m_audioinput_voice.reset();
+    }
+
+    // ۴. بررسی نیاز به رساپلر و تلاش برای ساخت آن در صورت تغییر کدک
+    bool use_manual_resampler = false;
+    if (source_fmt != target_fmt) {
+        if (!m_internal_push_resampler || m_internal_push_resampler->GetOutputFormat() != target_fmt) {
+            m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
+            if (!m_internal_push_resampler) {
+                // فعال‌سازی رساپلر داخلی دستی در صورت عدم دسترسی به رساپلرهای سیستم
+                use_manual_resampler = true;
+            } else {
+                m_internal_push_resample_buf.resize(target_samples_per_tick * target_fmt.channels);
+            }
+        } else if (!m_internal_push_resampler) {
+            use_manual_resampler = true;
         }
     }
 
-    // ۴. نمونه‌سازی و راه‌اندازی استریمر داخلی صوتی در صورت عدم فعالیت
-    if (!m_audioinput_voice) {
-        m_audioinput_voice = std::make_shared<AudioInputStreamer>(
-            m_voice_stream_id, 
-            MediaStreamOutput(target_fmt, target_samples_per_tick)
-        );
-
-        // ثبت توابع بازگشتی استاندارد پردازش و ارسال پکت‌ها به انکودر صوتی کلاینت
-        m_audioinput_voice->RegisterAudioCallback(
-            [this](auto && PH1, auto && PH2) { 
-                return AudioInputCallback(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2)); 
-            }, 
-            true
-        );
-        
-        m_audioinput_voice->RegisterAudioInputStatusCallback(
-            [this](auto && PH1) { 
-                AudioInputStatusCallback(std::forward<decltype(PH1)>(PH1)); 
-            }, 
-            true
-        );
-
-        // فعال‌سازی ترد همگام‌ساز صوتی با دقت بالا
-        if (!m_audioinput_voice->Open() || !m_audioinput_voice->StartStream()) {
-            m_audioinput_voice.reset();
-            return;
-        }
-    }
-
-    // ۵. تزریق مستقیم کل نمونه‌های دریافتی از جاوا به انتهای بافر حلقوی (FIFO) کلاینت
+    // ۵. تزریق نمونه‌های ورودی جاوا به انتهای بافر حلقوی
     m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), buffer, buffer + samples);
 
-    // محاسبات قطعه‌بندی زمانی فریم‌ها برای فرکانس ۴۸۰۰۰ هرتز استریو:
-    // فریم‌های استاندارد ۲۰ میلی‌ثانیه‌ای معادل ۹۶۰ نمونه به ازای هر کانال است.
-    // ۹۶۰ نمونه × ۲ کانال = ۱۹۲۰ خانه‌ی آرایه صوتی خام (Short)
-    const int SLICE_SAMPLES = 960;
-    const int SLICE_ELEMENTS = 1920;
-    
-    // حد نصاب بافر صوتی جهت شروع استریم (بافر کردن ۸ فریم معادل ۱۶۰ میلی‌ثانیه جهت هموارسازی Jitter لایه جاوا)
-    const size_t BUFFER_THRESHOLD = SLICE_ELEMENTS * 8;
+    // ۶. محاسبه تعداد سمپل‌های ورودی مورد نیاز برای تولید فریم صوتی هدف
+    int input_samples_needed = CalcSamples(target_fmt.samplerate, target_samples_per_tick, 48000);
+    int const input_elements_needed = input_samples_needed * source_fmt.channels; // ۲ کانال
+
+    // آستانه انباشت بافر برای رفع نوسانات فرکانسی (بافر کردن حداقل ۸ فریم)
+    size_t const BUFFER_THRESHOLD = input_elements_needed * 8;
 
     if (m_internal_buffering) {
         if (m_internal_audio_fifo.size() >= BUFFER_THRESHOLD) {
             m_internal_buffering = false;
         } else {
-            return; // تداوم تجمیع داده‌ها در بافر حلقوی
+            return; // منتظر تجمع داده‌های صوتی بیشتر بمان
         }
     }
 
-    // ۶. استخراج فریم‌های کاملاً هموار ۲۰ میلی‌ثانیه‌ای صوتی و تزریق آن به استریمر
-    while (m_internal_audio_fifo.size() >= static_cast<size_t>(SLICE_ELEMENTS)) {
-        // ایجاد آدیو فریم جدید متصل به ابتدای بافر حلقوی
-        media::AudioFrame frm(source_fmt, m_internal_audio_fifo.data(), SLICE_SAMPLES);
+    // ۷. حلقه پردازش و ارسال مستقیم فریم‌ها به انکودر صوتی کلاینت
+    while (m_internal_audio_fifo.size() >= static_cast<size_t>(input_elements_needed)) {
         
-        // تحویل فریم به استریمر صوتی جهت پردازش، نمونه‌برداری مجدد (Resampling) به کدک هدف و زمان‌بندی دقیق
-        m_audioinput_voice->InsertAudio(frm);
+        m_internal_push_resample_buf.resize(target_samples_per_tick * target_fmt.channels);
+        bool resample_ok = false;
 
-        // آزادسازی نمونه‌های پردازش‌شده از ابتدای صف داده خام صوتی
+        if (source_fmt == target_fmt) {
+            // بدون نیاز به رساپلر - کپی مستقیم داده‌ها
+            std::memcpy(m_internal_push_resample_buf.data(), m_internal_audio_fifo.data(), input_elements_needed * sizeof(short));
+            resample_ok = true;
+        } 
+        else if (!use_manual_resampler && m_internal_push_resampler) {
+            // استفاده از رساپلر سیستمی استاندارد پروژه
+            int resampled = m_internal_push_resampler->Resample(
+                m_internal_audio_fifo.data(),
+                input_samples_needed,
+                m_internal_push_resample_buf.data(),
+                target_samples_per_tick
+            );
+            resample_ok = (resampled > 0);
+        } 
+        else {
+            // لایه بهینه رساپلر دستی (مونو کردن استریو و کاهش نرخ نمونه‌برداری)
+            short* src_ptr = m_internal_audio_fifo.data();
+            short* dst_ptr = m_internal_push_resample_buf.data();
+
+            if (target_fmt.samplerate == 48000 && target_fmt.channels == 1) {
+                // تبدیل ۴۸k استریو به ۴۸k مونو
+                for (int i = 0; i < target_samples_per_tick; i++) {
+                    dst_ptr[i] = (src_ptr[i * 2] + src_ptr[i * 2 + 1]) / 2;
+                }
+                resample_ok = true;
+            } 
+            else if (target_fmt.samplerate == 16000 && target_fmt.channels == 1) {
+                // تبدیل ۴۸k استریو به ۱۶k مونو (کاهش نرخ با ضریب ۳)
+                for (int i = 0; i < target_samples_per_tick; i++) {
+                    int sum = 0;
+                    for (int j = 0; j < 3; j++) {
+                        sum += (src_ptr[(i * 3 + j) * 2] + src_ptr[(i * 3 + j) * 2 + 1]) / 2;
+                    }
+                    dst_ptr[i] = sum / 3;
+                }
+                resample_ok = true;
+            } 
+            else if (target_fmt.samplerate == 24000 && target_fmt.channels == 1) {
+                // تبدیل ۴۸k استریو به ۲۴k مونو (کاهش نرخ با ضریب ۲)
+                for (int i = 0; i < target_samples_per_tick; i++) {
+                    int sum = 0;
+                    for (int j = 0; j < 2; j++) {
+                        sum += (src_ptr[(i * 2 + j) * 2] + src_ptr[(i * 2 + j) * 2 + 1]) / 2;
+                    }
+                    dst_ptr[i] = sum / 2;
+                }
+                resample_ok = true;
+            }
+        }
+
+        if (resample_ok) {
+            // آماده‌سازی آدیو فریم همگام با کلاینت جهت فشرده‌سازی و ارسال
+            media::AudioFrame audframe(target_fmt, m_internal_push_resample_buf.data(), target_samples_per_tick);
+            audframe.force_enc = true;
+            audframe.userdata = STREAMTYPE_VOICE;
+            audframe.streamid = m_voice_stream_id;
+            audframe.sample_no = m_internal_samples_recorded;
+            m_internal_samples_recorded += target_samples_per_tick;
+
+            // عبور مستقیم فریم از لایه واسط و هدایت آن به صف انکودر اصلی
+            QueueVoiceFrame(audframe);
+        }
+
+        // آزادسازی نمونه‌های صوتی مصرف‌شده از ابتدای بافر حلقوی
         m_internal_audio_fifo.erase(
-            m_internal_audio_fifo.begin(), 
-            m_internal_audio_fifo.begin() + SLICE_ELEMENTS
+            m_internal_audio_fifo.begin(),
+            m_internal_audio_fifo.begin() + input_elements_needed
         );
     }
 
-    // ۷. فعال‌سازی مجدد وضعیت بافرینگ در صورت تخلیه کامل صف صوتی جهت جلوگیری از نویز کشیدگی فرکانسی
+    // ۹. اگر بافر حلقوی کاملاً خالی شود، حالت بافرینگ جهت محافظت مجدداً فعال می‌شود
     if (m_internal_audio_fifo.empty()) {
         m_internal_buffering = true;
     }
