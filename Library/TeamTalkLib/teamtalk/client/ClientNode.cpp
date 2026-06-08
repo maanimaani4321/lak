@@ -6053,3 +6053,36 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
     else TTASSERT(0);
 }
 
+void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
+    int const channel_count = (m_mychannel) ? GetAudioCodecChannels(m_mychannel->GetAudioCodec()) : 2;
+    int const sample_rate = (m_mychannel) ? GetAudioCodecSampleRate(m_mychannel->GetAudioCodec()) : 48000;
+    
+    // هر ۲۰ میلی‌ثانیه تزریق شود
+    int const required_samples = (sample_rate * 20 / 1000) * channel_count;
+
+    std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
+
+    // اضافه کردن داده‌های جدید
+    m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), buffer, buffer + samples);
+
+    // اگر بافر بیش از ۲ ثانیه شد، ۱ ثانیه از ابتدای آن (قدیمی‌ترین‌ها) را دور بریز
+    size_t const max_buffer_size = (sample_rate * channel_count * 2); 
+    if (m_internal_audio_fifo.size() > max_buffer_size) {
+        size_t const discard_size = (sample_rate * channel_count); // حذف ۱ ثانیه
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + discard_size);
+    }
+
+    // تزریق بسته‌های ۲۰ میلی‌ثانیه‌ای
+    while (m_internal_audio_fifo.size() >= (size_t)required_samples) {
+        media::AudioFrame frame;
+        frame.inputfmt = media::AudioFormat(sample_rate, channel_count);
+        frame.input_buffer = m_internal_audio_fifo.data();
+        frame.input_samples = required_samples / channel_count;
+        frame.timestamp = GETTIMESTAMP();
+        
+        // تزریق به لوله اصلی با ID 1380
+        this->QueueAudioInput(frame, 1380); 
+
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_samples);
+    }
+}

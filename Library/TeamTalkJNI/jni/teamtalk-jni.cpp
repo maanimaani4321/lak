@@ -32,6 +32,7 @@
 
 static std::mutex ttinstmutex;
 static std::map<jint, TTInstance*> ttinstances;
+extern "C" void TT_PushInternalAudio(TTInstance* lpTTInstance, const short* lpData, int nSamples);
 
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
@@ -501,6 +502,26 @@ extern "C" {
                                         bEnable);
     }
 
+    JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalAudio(JNIEnv* env,
+                                                                            jobject thiz,
+                                                                            jshortArray data)
+    {
+        // ۱. گرفتن نمونه کلاینت
+        TTInstance* inst = GetTTInstance(env, thiz);
+        if (inst == nullptr) return;
+
+        // ۲. گرفتن داده‌ها از جاوا
+        jsize len = env->GetArrayLength(data);
+        jshort* body = env->GetShortArrayElements(data, nullptr);
+        if (body == nullptr) return;
+
+        // ۳. تزریق به پل ارتباطی که در TeamTalk.cpp ساختیم
+        TT_PushInternalAudio(inst, (const short*)body, (int)len);
+
+        // ۴. آزاد کردن حافظه جاوا
+        env->ReleaseShortArrayElements(data, body, JNI_ABORT);
+    }
+    
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setVoiceActivationLevel(JNIEnv* env,
                                                                                      jobject thiz,
                                                                                      jint nLevel)
