@@ -6139,12 +6139,6 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         // حذف دیتای پردازش شده از ابتدای FIFO
         m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
                                      m_internal_audio_fifo.begin() + elements_required_per_frame);
-        
-        // فعال کردن آیکون بلندگو در برنامه
-        if ((m_flags & CLIENT_SNDINPUT_VOICEACTIVE) == 0) {
-            m_flags |= CLIENT_SNDINPUT_VOICEACTIVE;
-            m_listener->OnVoiceActivated(true);
-        }
     }
 
     // ۸. بازگشت به حالت انتظار در صورت تخلیه کامل بافر
