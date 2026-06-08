@@ -6056,12 +6056,10 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) return;
 
-    // ۱. دریافت فرمت هدف (فرمت کدک کانال)
     auto target_fmt = GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec());
     int target_samples = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
     
-    // ۲. بررسی و ایجاد رساپلر در صورت نیاز (از 48k به فرمت کانال)
-    media::AudioFormat source_fmt(48000, 2); // فرمت ورودی از جاوا
+    media::AudioFormat source_fmt(48000, 2); // فرمت ورودی ثابت از سمت لایه سیستم صوتی جاوا
     
     if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
         m_internal_push_resampler->GetOutputFormat() != target_fmt) {
@@ -6071,42 +6069,35 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
 
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
     
-    // ۳. رساپل کردن داده‌های ورودی
-    int out_samples = m_internal_push_resampler->Resample(buffer, samples, 
-                                                         m_internal_push_resample_buf.data(), 
-                                                         (int)m_internal_push_resample_buf.size());
+    int in_frames = samples / source_fmt.channels;
+    
+    int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
+                                                          m_internal_push_resample_buf.data(), 
+                                                          (int)m_internal_push_resample_buf.size());
     
     if (out_samples > 0) {
-        // اضافه کردن به فیفو
         m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
                                      m_internal_push_resample_buf.begin(), 
                                      m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
     }
 
-    // ۴. استخراج فریم‌های ۲۰ میلی‌ثانیه‌ای (یا هر چه کدک بخواهد) و ارسال مستقیم به ترد صوتی
     int required_total = target_samples * target_fmt.channels;
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
-        // ما نیاز داریم یک کپی از داده بگیریم چون AudioThread به صورت Async کار می‌کند
+        
         ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples));
         
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
-        raw_frame->force_enc = true; // اجبار به انکود حتی اگر PTT فشار داده نشده باشد
+        raw_frame->force_enc = false; 
+        
         raw_frame->sample_no = m_soundprop.samples_recorded;
         m_soundprop.samples_recorded += target_samples;
         raw_frame->timestamp = GETTIMESTAMP();
 
-        // ارسال مستقیم به ترد صوتی (دور زدن تمام محدودیت‌های فلگ)
         m_voice_thread.QueueAudio(mb);
 
         m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
-        
-        // فعال کردن آیکون میکروفون در UI (ارسال رویداد به UI)
-        if ((m_flags & CLIENT_SNDINPUT_VOICEACTIVE) == 0) {
-            m_flags |= CLIENT_SNDINPUT_VOICEACTIVE;
-            m_listener->OnVoiceActivated(true);
-        }
     }
 }
