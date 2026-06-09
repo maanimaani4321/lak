@@ -1243,7 +1243,7 @@ void ClientNode::EncodedAudioFileFrame(const teamtalk::AudioCodec& codec,
 }
 
 
-void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& /*streamer*/,
+void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& streamer,
                                  const short* buffer, int n_samples)
 {
     rguard_t const g_snd(LockSndprop());
@@ -1253,6 +1253,7 @@ void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& /*streamer*/,
     int const codec_channels = GetAudioCodecChannels(m_voice_thread.Codec());
 
     const short* capture_buffer = nullptr;
+    
     if (m_capture_resampler)
     {
         assert((int)m_capture_buffer.size() == codec_samples * codec_channels);
@@ -1267,11 +1268,46 @@ void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& /*streamer*/,
         capture_buffer = m_capture_buffer.data();
     }
     else
+    {
         capture_buffer = buffer;
+    }
+
+
+    int required_total = codec_samples * codec_channels;
+    std::vector<short> final_output_pcm(required_total);
+    bool has_push_audio = false;
+
+    {
+        std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
+
+        if (m_callback_fifo.size() >= (size_t)required_total) {
+            has_push_audio = true;
+            
+            bool mic_is_open = m_voice_thread.IsVoiceActive() || ((m_flags & CLIENT_TX_VOICE) != 0);
+
+            if (mic_is_open) {
+                for (int i = 0; i < required_total; ++i) {
+                    int32_t mixed = capture_buffer[i] + m_callback_fifo[i];
+                    final_output_pcm[i] = (short)((mixed > 32767) ? 32767 : (mixed < -32768 ? -32768 : mixed));
+                }
+            } else {
+                memcpy(final_output_pcm.data(), m_callback_fifo.data(), required_total * sizeof(short));
+            }
+            
+            m_callback_fifo.erase(m_callback_fifo.begin(), m_callback_fifo.begin() + required_total);
+        } else {
+            memcpy(final_output_pcm.data(), capture_buffer, required_total * sizeof(short));
+        }
+    }
+
 
     AudioFrame audframe(AudioFormat(codec_samplerate, codec_channels),
-                        const_cast<short*>(capture_buffer), codec_samples);
+                        final_output_pcm.data(), codec_samples);
     
+    if (has_push_audio) {
+        audframe.force_enc = true;
+    }
+
     QueueAudioCapture(audframe);
 }
 
@@ -6101,6 +6137,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     }
 
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
+        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
         
@@ -6116,6 +6153,12 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
 
         // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
         m_voice_thread.QueueAudio(mb);
+        } else {
+            // ب: میکروفون واقعی داریم -> فریم آماده را به رینگ بافر دوم (m_callback_fifo) منتقل کن
+            m_callback_fifo.insert(m_callback_fifo.end(), 
+                                   m_internal_audio_fifo.begin(), 
+                                   m_internal_audio_fifo.begin() + required_total);
+        }
 
         // پاکسازی فریم پردازش شده از ابتدای فیفو
         m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
