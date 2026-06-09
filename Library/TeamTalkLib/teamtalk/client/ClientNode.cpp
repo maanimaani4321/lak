@@ -1031,7 +1031,9 @@ void ClientNode::CloseAudioCapture()
 void ClientNode::QueueAudioCapture(media::AudioFrame& audframe)
 {
     bool const ptt_close = m_voice_tx_closed.exchange(false);
+    if (!audframe.force_enc) { 
     audframe.force_enc = (((m_flags & CLIENT_TX_VOICE) != 0u) || ptt_close);
+}
     audframe.voiceact_enc = ((m_flags & CLIENT_SNDINPUT_VOICEACTIVATED) != 0u);
     audframe.sample_no = m_soundprop.samples_recorded;
     m_soundprop.samples_recorded += audframe.input_samples;
@@ -6151,13 +6153,9 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     }
 
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
-        if ( (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) || 
-             m_soundsystem->IsStreamStopped(static_cast<StreamCapture*>(this)) ) {
-            if (!m_callback_fifo.empty()) {
-                m_callback_fifo.clear();
-            }
+        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID)  {
             if (m_voice_stream_id == 0) {
-                GEN_NEXT_ID(m_voice_stream_id);
+                m_voice_stream_id = 1;
             }
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
@@ -6176,6 +6174,9 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
         m_voice_thread.QueueAudio(mb);
         } else {
+                if (m_voice_stream_id == 0) {
+        m_voice_stream_id = 1; 
+    }
             m_callback_fifo.insert(m_callback_fifo.end(), 
                                    m_internal_audio_fifo.begin(), 
                                    m_internal_audio_fifo.begin() + required_total);
