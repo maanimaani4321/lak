@@ -530,7 +530,7 @@ int AudioThread::svc()
 
 void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 {
-        static int stutter_cnt = 0;
+    static int stutter_cnt = 0;
     if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) {
         if (stutter_cnt++ % 3 != 0) {
             memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
@@ -569,7 +569,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 frame->format = AV_SAMPLE_FMT_S16;
                 frame->sample_rate = audblock.inputfmt.samplerate;
                 av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
-                frame->pts = AV_NOPTS_VALUE; // اجازه بده FFmpeg خودش محاسبه کند
+                frame->pts = AV_NOPTS_VALUE;
                 
                 if (av_frame_get_buffer(frame, 0) >= 0) {
                     memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
@@ -582,7 +582,6 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                                 break;
                             }
                             
-                            // گارد امنیتی: فقط در صورتی که خروجی S16 استاندارد باشد می‌خوانیم تا صدای سوت ندهد
                             if (out_frame->format == AV_SAMPLE_FMT_S16) {
                                 int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
                                 short* out_data = (short*)out_frame->data[0];
@@ -595,19 +594,16 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 av_frame_free(&frame);
             }
 
-            // مکانیزم پدینگ برای جلوگیری از قطعی صدا
             int required_elements = audblock.input_samples * audblock.inputfmt.channels;
             if (!m_filter_fifo.empty()) {
                 int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
                 memcpy(audblock.input_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
                 m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
                 
-                // اگر فیلتر کُند بود و فریم کامل نشد، بقیه‌اش را با سکوت پُر کن تا VAD و انکودر Crash نکنند
                 if (copy_elements < required_elements) {
                     memset(audblock.input_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
                 }
             } else {
-                // اگر فیلتر کلاً خالی بود (مثلاً در حال محاسبه delay است)، سکوت بفرست
                 memset(audblock.input_buffer, 0, required_elements * sizeof(short));
             }
         }
@@ -615,10 +611,56 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 
     MeasureVoiceLevel(audblock);
 
+    bool has_internal_data = false;
+
+    // اعمال منطق همگام‌ساز صوتی و میکس سه شرطی
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_internal_audio_mtx);
+        int required_total = audblock.input_samples * audblock.inputfmt.channels;
+
+        // بررسی لزوم انباشت فریم‌های اولیه صوتی برای رفع مشکل لرزش زمانی (Jitter)
+        int wait_frames = 5;
+        int wait_threshold = wait_frames * required_total;
+
+        if (m_internal_buffering) {
+            if (m_internal_audio_fifo.size() >= (size_t)wait_threshold) {
+                m_internal_buffering = false;
+            }
+        }
+
+        bool mic_is_open = (IsVoiceActive() && audblock.voiceact_enc) || audblock.force_enc;
+
+        if (!m_internal_buffering && m_internal_audio_fifo.size() >= (size_t)required_total) {
+            has_internal_data = true;
+
+            if (mic_is_open) {
+                // شرط ۱: پکت صوتی در بافر موجود است و میکروفون نیز فعال است -> ادغام دو سیگنال با کلیپ ایمن
+                for (int i = 0; i < required_total; ++i) {
+                    int32_t mixed = audblock.input_buffer[i] + m_internal_audio_fifo[i];
+                    audblock.input_buffer[i] = (short)((mixed > 32767) ? 32767 : (mixed < -32768 ? -32768 : mixed));
+                }
+            } else {
+                // شرط ۲: پکت صوتی در بافر موجود است اما میکروفون قطع است -> نادیده گرفتن نویز محیط و نوشتن مستقیم بافر داخلی
+                memcpy(audblock.input_buffer, m_internal_audio_fifo.data(), required_total * sizeof(short));
+            }
+
+            m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+
+            // در صورتی که صف صوتی خالی شود، مجددا وضعیت را برای بافرینگ فریم‌های بعدی تنظیم می‌کنیم
+            if (m_internal_audio_fifo.empty()) {
+                m_internal_buffering = true;
+            }
+        }
+        // شرط ۳: بافر صوتی خالی است -> جریان به صورت مستقیم با پکت میکروفون به جلو فرستاده می‌شود (در بخش پایین پردازش می‌شود)
+    }
+
     if(audblock.inputfmt.channels == 2)
         SelectStereo(m_stereo, audblock.input_buffer, audblock.input_samples);
 
-    if ((IsVoiceActive() && audblock.voiceact_enc) || audblock.force_enc)
+    // افزودن وضعیت داده‌های صوتی رینگ داخلی به منطق ارسال به انکودر
+    bool const transmit = (IsVoiceActive() && audblock.voiceact_enc) || audblock.force_enc || has_internal_data;
+
+    if (transmit)
     {
         const char* enc_data = nullptr;
         std::vector<int> enc_frame_sizes;
@@ -797,3 +839,79 @@ const char* AudioThread::ProcessOPUS(const media::AudioFrame& audblock, std::vec
     return m_encbuf.data();
 }
 #endif
+
+void AudioThread::FeedToInsertAudioBlock(const short* buffer, int samples, int inputdeviceid) {
+    if (m_codec.codec == teamtalk::CODEC_NO_CODEC) return;
+
+    auto target_fmt = GetAudioCodecAudioFormat(m_codec);
+    int target_samples = GetAudioCodecCbSamples(m_codec);
+    media::AudioFormat source_fmt(48000, 2);
+
+    if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
+        m_internal_push_resampler->GetOutputFormat() != target_fmt) {
+        m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
+        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 4);
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(m_internal_audio_mtx);
+
+    int in_frames = samples / source_fmt.channels;
+    int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
+                                                          m_internal_push_resample_buf.data(), 
+                                                          (int)m_internal_push_resample_buf.size());
+
+    if (out_samples > 0) {
+        m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
+                                     m_internal_push_resample_buf.begin(), 
+                                     m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
+    }
+
+    int max_buffer_samples = target_fmt.samplerate * target_fmt.channels * 2; // حداکثر بافر ۲ ثانیه
+    int trim_samples = target_fmt.samplerate * target_fmt.channels * 0.5; // هرس کردن بافر مازاد به اندازه نیم ثانیه
+
+    if (m_internal_audio_fifo.size() > (size_t)max_buffer_samples) {
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
+                                     m_internal_audio_fifo.begin() + trim_samples);
+        MYTRACE(ACE_TEXT("AudioThread: Internal buffer overflow! Trimmed 500ms of old data.\n"));
+    }
+
+    int required_total = target_samples * target_fmt.channels;
+    int wait_frames = 5;
+    int wait_threshold = wait_frames * required_total;
+
+    if (m_internal_buffering) {
+        if (m_internal_audio_fifo.size() >= (size_t)wait_threshold) {
+            m_internal_buffering = false;
+        } else {
+            return;
+        }
+    }
+
+    while (m_internal_audio_fifo.size() >= (size_t)required_total) {
+        if (inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
+            if (m_voice_stream_id == 0) {
+                m_voice_stream_id = 1;
+            }
+            
+            std::vector<short> frame_data(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+            
+            ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, frame_data.data(), target_samples));
+            auto* raw_frame = AudioFrameFromMsgBlock(mb);
+            raw_frame->userdata = STREAMTYPE_VOICE;
+            raw_frame->force_enc = true;
+            raw_frame->streamid = m_voice_stream_id;
+            raw_frame->sample_no = m_internal_samples_recorded;
+            m_internal_samples_recorded += target_samples;
+            raw_frame->timestamp = GETTIMESTAMP();
+
+            QueueAudio(mb);
+        } else {
+            break; 
+        }
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+    }
+
+    if (m_internal_audio_fifo.empty()) {
+        m_internal_buffering = true;
+    }
+}

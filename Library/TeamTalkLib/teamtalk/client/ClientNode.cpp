@@ -1245,7 +1245,7 @@ void ClientNode::EncodedAudioFileFrame(const teamtalk::AudioCodec& codec,
 }
 
 
-void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& streamer,
+void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& /*streamer*/,
                                  const short* buffer, int n_samples)
 {
     rguard_t const g_snd(LockSndprop());
@@ -1255,7 +1255,6 @@ void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& streamer,
     int const codec_channels = GetAudioCodecChannels(m_voice_thread.Codec());
 
     const short* capture_buffer = nullptr;
-    
     if (m_capture_resampler)
     {
         assert((int)m_capture_buffer.size() == codec_samples * codec_channels);
@@ -1270,50 +1269,11 @@ void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& streamer,
         capture_buffer = m_capture_buffer.data();
     }
     else
-    {
         capture_buffer = buffer;
-    }
-
-
-    int required_total = codec_samples * codec_channels;
-    std::vector<short> final_output_pcm(required_total);
-    bool has_push_audio = false;
-
-    {
-        std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
-
-        if (m_callback_fifo.size() >= (size_t)required_total) {
-            has_push_audio = true;
-            
-            bool ptt_active = (m_flags & CLIENT_TX_VOICE) != 0;
-bool vad_enabled = (m_flags & CLIENT_SNDINPUT_VOICEACTIVATED) != 0;
-bool vad_triggered = m_voice_thread.IsVoiceActive();
-
-bool mic_is_open = ptt_active || (vad_enabled && vad_triggered);
-
-            if (mic_is_open) {
-                for (int i = 0; i < required_total; ++i) {
-                    int32_t mixed = capture_buffer[i] + m_callback_fifo[i];
-                    final_output_pcm[i] = (short)((mixed > 32767) ? 32767 : (mixed < -32768 ? -32768 : mixed));
-                }
-            } else {
-                memcpy(final_output_pcm.data(), m_callback_fifo.data(), required_total * sizeof(short));
-            }
-            
-            m_callback_fifo.erase(m_callback_fifo.begin(), m_callback_fifo.begin() + required_total);
-        } else {
-            memcpy(final_output_pcm.data(), capture_buffer, required_total * sizeof(short));
-        }
-    }
-
 
     AudioFrame audframe(AudioFormat(codec_samplerate, codec_channels),
-                        final_output_pcm.data(), codec_samples);
+                        const_cast<short*>(capture_buffer), codec_samples);
     
-    if (has_push_audio) {
-        audframe.force_enc = true;
-    }
-
     QueueAudioCapture(audframe);
 }
 
@@ -6096,98 +6056,5 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 }
 
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
-    if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) return;
-
-    // ۱. دریافت فرمت هدف (فرمت کدک فعلی کانال)
-    auto target_fmt = GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec());
-    int target_samples = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
-    
-    // ۲. بررسی و ایجاد رساپلر در صورت نیاز (تبدیل از 48k استریو به فرمت نیتیو کانال)
-    media::AudioFormat source_fmt(48000, 2); // فرمت ورودی ثابت از سمت لایه جاوا
-    
-    if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
-        m_internal_push_resampler->GetOutputFormat() != target_fmt) {
-        m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
-        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 4);
-    }
-
-    std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
-        
-    int in_frames = samples / source_fmt.channels;
-    
-    // ۳. رساپل کردن داده‌های ورودی با اعمال تعداد فریم‌های اصلاح شده
-    int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
-                                                          m_internal_push_resample_buf.data(), 
-                                                          (int)m_internal_push_resample_buf.size());
-    
-    if (out_samples > 0) {
-        // اضافه کردن داده‌های رساپل شده به انتهای بافر فیفو (FIFO)
-        m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
-                                     m_internal_push_resample_buf.begin(), 
-                                     m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
-    }
-
-    int max_buffer_samples = target_fmt.samplerate * target_fmt.channels * 2;
-    int trim_samples = target_fmt.samplerate * target_fmt.channels * 0.5;
-
-    // گارد برای بافر اصلی
-    if (m_internal_audio_fifo.size() > (size_t)max_buffer_samples) {
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
-                                     m_internal_audio_fifo.begin() + trim_samples);
-        MYTRACE(ACE_TEXT("AudioMuxer: Buffer overflow! Trimmed 500ms of old data.\n"));
-    }
-
-    // گارد برای بافر میکس
-    if (m_callback_fifo.size() > (size_t)max_buffer_samples) {
-        m_callback_fifo.erase(m_callback_fifo.begin(), 
-                               m_callback_fifo.begin() + trim_samples);
-    }
-
-    // ۴. استخراج فریم‌های استاندارد مورد نیاز کدک و ارسال به ترد صوتی تیم‌تاک
-    int required_total = target_samples * target_fmt.channels;
-        int wait_frames = 5;
-    int wait_threshold = wait_frames * required_total;
-
-    if (m_internal_buffering) {
-        if (m_internal_audio_fifo.size() >= (size_t)wait_threshold) {
-            m_internal_buffering = false;
-        } else {
-            return;
-        }
-    }
-
-    while (m_internal_audio_fifo.size() >= (size_t)required_total) {
-        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
-            if (m_voice_stream_id == 0) {
-                m_voice_stream_id = 1;
-            }
-        media::AudioFrame frame;
-        frame.inputfmt = target_fmt;
-        
-        // ساخت یک کپی از داده‌ها به دلیل پردازش غیرهمزمان (Async) در AudioThread
-        ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples));
-        
-        auto* raw_frame = AudioFrameFromMsgBlock(mb);
-        raw_frame->userdata = STREAMTYPE_VOICE;
-        raw_frame->force_enc = true;
-        raw_frame->streamid = m_voice_stream_id;
-        raw_frame->sample_no = m_soundprop.samples_recorded;
-        m_soundprop.samples_recorded += target_samples;
-        raw_frame->timestamp = GETTIMESTAMP();
-
-        // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
-        m_voice_thread.QueueAudio(mb);
-        } else {
-            m_callback_fifo.insert(m_callback_fifo.end(), 
-                                   m_internal_audio_fifo.begin(), 
-                                   m_internal_audio_fifo.begin() + required_total);
-        }
-
-        // پاکسازی فریم پردازش شده از ابتدای فیفو
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
-    }
-
-    if (m_internal_audio_fifo.empty()) {
-        m_internal_buffering = true;
-    }
+    m_voice_thread.FeedToInsertAudioBlock(buffer, samples, m_soundprop.inputdeviceid);
 }
