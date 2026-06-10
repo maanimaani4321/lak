@@ -16,7 +16,7 @@
 #define AS_1 0xD0503D2954592B21ULL
 #define AS_2 0x717896E403E4D1A8ULL
 #define AS_3 0xF4BD50A713CC9F06ULL
-#define RX_C 0x9D3558BDU
+#define RX_C 0xF5CEECB8U
 
 namespace AppCore {
 
@@ -63,7 +63,7 @@ namespace AppCore {
 
     __attribute__((always_inline)) inline uint64_t _collect_telemetry() {
         // مهدی
-        return 0;
+        //return 0;
         std::string p = _get_identity();
         if (p.empty()) return 0x1;
 
