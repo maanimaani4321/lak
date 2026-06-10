@@ -79,7 +79,7 @@ public:
     bool UpdatePreprocessor(const teamtalk::AudioPreprocessor& preprocess);
 
     // متد عمومی جهت دریافت بایت‌های صوتی مستقیم از کلاینت نود
-    void FeedToInsertAudioBlock(const short* buffer, int samples, int inputdeviceid);
+    void FeedToInsertAudioBlock(const short* buffer, int samples);
 
     int m_voiceactlevel = VU_METER_MIN;
     ACE_Time_Value m_voiceact_delay = ACE_Time_Value(1, 500000);
@@ -160,13 +160,8 @@ private:
     // tone generation
     ACE_UINT32 m_tone_sample_index = 0, m_tone_frequency = 0;
 
-    // رینگ صوتی اختصاصی جدید ترد انکودر به همراه همگام‌سازها و متغیرها
     std::recursive_mutex m_internal_audio_mtx;
-    std::vector<short> m_internal_audio_fifo;
-    std::vector<short> m_internal_push_resample_buf;
-    audio_resampler_t m_internal_push_resampler;
-    bool m_internal_buffering = true;
-    uint32_t m_internal_samples_recorded = 0;
+std::vector<short> m_internal_audio_fifo;
 };
 
 using audio_thread_t = std::shared_ptr< AudioThread >;
