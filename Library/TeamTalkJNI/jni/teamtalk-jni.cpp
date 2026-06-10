@@ -32,7 +32,7 @@
 
 static std::mutex ttinstmutex;
 static std::map<jint, TTInstance*> ttinstances;
-extern "C" void TT_PushInternalAudio(TTInstance* lpTTInstance, const short* lpData, int nSamples);
+extern "C" void TT_PushInternalAudio(TTInstance* lpTTInstance, const short* lpData, int nSamples, int nGain, TTBOOL bForceTransmitCheck);
 
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
@@ -504,7 +504,9 @@ extern "C" {
 
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalAudio(JNIEnv* env,
                                                                             jobject thiz,
-                                                                            jshortArray data)
+                                                                            jshortArray data,
+                                                                            jint gain,
+                                                                            jboolean forceTransmitCheck)
     {
         // ۱. گرفتن نمونه کلاینت
         TTInstance* inst = GetTTInstance(env, thiz);
@@ -515,8 +517,11 @@ extern "C" {
         jshort* body = env->GetShortArrayElements(data, nullptr);
         if (body == nullptr) return;
 
-        // ۳. تزریق به پل ارتباطی که در TeamTalk.cpp ساختیم
-        TT_PushInternalAudio(inst, (const short*)body, (int)len);
+        // تبدیل jboolean به فرمت مورد نیاز TTBOOL (که معمولاً یک نوع صحیح/boolean است)
+        TTBOOL const bForceTransmit = forceTransmitCheck ? JTRUE : JFALSE;
+
+        // ۳. تزریق به پل ارتباطی با پارامترهای جدید
+        TT_PushInternalAudio(inst, (const short*)body, (int)len, (int)gain, bForceTransmit);
 
         // ۴. آزاد کردن حافظه جاوا
         env->ReleaseShortArrayElements(data, body, JNI_ABORT);

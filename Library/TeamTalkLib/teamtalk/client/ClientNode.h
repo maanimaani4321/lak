@@ -184,7 +184,7 @@ std::vector<short> m_internal_audio_fifo;
 std::mutex m_internal_audio_mtx;
 std::vector<short> m_internal_push_resample_buf;
 audio_resampler_t m_internal_push_resampler;
-        void FeedToInsertAudioBlock(const short* buffer, int samples);
+        void FeedToInsertAudioBlock(const short* buffer, int samples, int gain, bool force_transmit_check);
         ClientNode(const ACE_TString& version, ClientListener* listener);
         ~ClientNode() override;
         bool SetSoundInputFilter(const ACE_CString& filter_str);
