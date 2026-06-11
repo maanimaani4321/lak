@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: checkout_code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: 'recursive'
 
@@ -72,7 +72,7 @@ jobs:
           find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
 
       - name: upload_results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: TeamTalk-v8-Offline-Package
           path: final_output/
