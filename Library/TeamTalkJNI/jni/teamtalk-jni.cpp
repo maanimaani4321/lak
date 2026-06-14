@@ -1,26 +1,3 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- *
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
 #include "ttconvert-jni.h"
 
 #include <algorithm>
@@ -580,6 +557,124 @@ extern "C" {
         TT_PushInternalVideo(inst, reinterpret_cast<const char*>(body), (int)data_size, (int)width, (int)height, (int)four_cc, top_down ? JTRUE : JFALSE);
 
         env->ReleaseByteArrayElements(data, body, JNI_ABORT);
+    }
+    
+    JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalVideoYUV(
+        JNIEnv* env,
+        jobject thiz,
+        jobject y_buf,
+        jobject u_buf,
+        jobject v_buf,
+        jint y_stride,
+        jint u_stride,
+        jint v_stride,
+        jint u_pix_stride,
+        jint v_pix_stride,
+        jint width,
+        jint height,
+        jint rotation) 
+    {
+        THROW_NULLEX(env, y_buf, );
+        THROW_NULLEX(env, u_buf, );
+        THROW_NULLEX(env, v_buf, );
+
+        uint8_t* y_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(y_buf));
+        uint8_t* u_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(u_buf));
+        uint8_t* v_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(v_buf));
+
+        if (!y_data || !u_data || !v_data) return;
+
+        TTInstance* inst = GetTTInstance(env, thiz);
+        if (inst == nullptr) return;
+
+        int out_width = (rotation == 90 || rotation == 270) ? height : width;
+        int out_height = (rotation == 90 || rotation == 270) ? width : height;
+
+        int y_size = out_width * out_height;
+        int uv_width = out_width / 2;
+        int uv_height = out_height / 2;
+        int uv_size = uv_width * uv_height;
+        int total_size = y_size + 2 * uv_size;
+
+        static thread_local std::vector<uint8_t> out_buffer;
+        if (out_buffer.size() < static_cast<size_t>(total_size)) {
+            out_buffer.resize(total_size);
+        }
+
+        uint8_t* dst_y = out_buffer.data();
+        uint8_t* dst_u = dst_y + y_size;
+        uint8_t* dst_v = dst_u + uv_size;
+
+        if (rotation == 90) {
+            for (int r = 0; r < height; ++r) {
+                int src_row = r * y_stride;
+                for (int c = 0; c < width; ++c) {
+                    dst_y[c * height + (height - 1 - r)] = y_data[src_row + c];
+                }
+            }
+            for (int r = 0; r < height / 2; ++r) {
+                int src_u_row = r * u_stride;
+                int src_v_row = r * v_stride;
+                for (int c = 0; c < width / 2; ++c) {
+                    int dst_idx = c * (height / 2) + ((height / 2) - 1 - r);
+                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+                }
+            }
+        } 
+        else if (rotation == 180) {
+            for (int r = 0; r < height; ++r) {
+                int src_row = r * y_stride;
+                int dst_row = (height - 1 - r) * width;
+                for (int c = 0; c < width; ++c) {
+                    dst_y[dst_row + (width - 1 - c)] = y_data[src_row + c];
+                }
+            }
+            for (int r = 0; r < height / 2; ++r) {
+                int src_u_row = r * u_stride;
+                int src_v_row = r * v_stride;
+                int dst_row = ((height / 2) - 1 - r) * (width / 2);
+                for (int c = 0; c < width / 2; ++c) {
+                    int dst_idx = dst_row + ((width / 2) - 1 - c);
+                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+                }
+            }
+        } 
+        else if (rotation == 270) {
+            for (int r = 0; r < height; ++r) {
+                int src_row = r * y_stride;
+                for (int c = 0; c < width; ++c) {
+                    dst_y[(width - 1 - c) * height + r] = y_data[src_row + c];
+                }
+            }
+            for (int r = 0; r < height / 2; ++r) {
+                int src_u_row = r * u_stride;
+                int src_v_row = r * v_stride;
+                for (int c = 0; c < width / 2; ++c) {
+                    int dst_idx = ((width / 2) - 1 - c) * (height / 2) + r;
+                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+                }
+            }
+        }
+        else {
+            for (int r = 0; r < height; ++r) {
+                memcpy(dst_y + r * width, y_data + r * y_stride, width);
+            }
+            for (int r = 0; r < height / 2; ++r) {
+                int dst_offset = r * (width / 2);
+                int src_u_row = r * u_stride;
+                int src_v_row = r * v_stride;
+                for (int c = 0; c < width / 2; ++c) {
+                    dst_u[dst_offset + c] = u_data[src_u_row + c * u_pix_stride];
+                    dst_v[dst_offset + c] = v_data[src_v_row + c * v_pix_stride];
+                }
+            }
+        }
+
+        // فراخوانی مستقیم تابع صادره با آدرس نمونه فعال و فرمت I420 (شناسه ۱۰۰)
+        TT_PushInternalVideo(inst, reinterpret_cast<const char*>(dst_y), total_size, out_width, out_height, 100, JFALSE);
     }
     
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setVoiceActivationLevel(JNIEnv* env,
