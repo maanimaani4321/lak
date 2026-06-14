@@ -33,6 +33,9 @@
 static std::mutex ttinstmutex;
 static std::map<jint, TTInstance*> ttinstances;
 extern "C" void TT_PushInternalAudio(TTInstance* lpTTInstance, const short* lpData, int nSamples, int nGain, TTBOOL bForceTransmitCheck);
+extern "C" TTBOOL TT_StartInternalVideoTransmission(TTInstance* lpTTInstance, IN const VideoCodec* lpVideoCodec, int nWidth, int nHeight, int nFPS);
+extern "C" TTBOOL TT_StopInternalVideoTransmission(TTInstance* lpTTInstance);
+extern "C" void TT_PushInternalVideo(TTInstance* lpTTInstance, const char* lpData, int nDataSize, int nWidth, int nHeight, int nFourCC, TTBOOL bTopDown);
 
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
