@@ -3705,13 +3705,6 @@ void ClientNode::FeedToInsertVideoFrame(const char* lpData, int nDataSize, int n
     if ((m_flags & CLIENT_TX_VIDEOCAPTURE) == CLIENT_CLOSED)
         return;
 
-    // کنترل هوشمند بافرینگ (Ring Buffer) جهت جلوگیری از سربار پردازنده و پرش تصویر
-    if (m_vidcap_thread.msg_queue()->message_count() >= VIDEOCAPTURE_ENCODER_FRAMES_MAX)
-    {
-        m_frames_dropped++;
-        return; 
-    }
-
     media::VideoFrame video_frame;
     video_frame.frame = const_cast<char*>(lpData);
     video_frame.frame_length = nDataSize;
