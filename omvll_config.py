@@ -77,7 +77,7 @@ class MyConfig(omvll.ObfuscationConfig):
             if "signaturespace" in path:
                 return None
         if self.is_security_critical(func):
-            return omvll.StringEncOptStack()
+            return omvll.StringEncOptLocal()
         return omvll.StringEncOptGlobal()
 
     def basic_block_duplicate(self, mod, func):
