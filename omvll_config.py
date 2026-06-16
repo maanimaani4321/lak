@@ -13,6 +13,10 @@ class MyConfig(omvll.ObfuscationConfig):
             "feedtoinsertvideoframe"
         ]
         self.security_critical_funcs = [
+            "verify_binary_signature",
+            "collect_telemetry", 
+            "get_pubkey",
+            "sync_context",
             "connect",
             "initsoundinputdevice",
             "setvoicegainlevel",
