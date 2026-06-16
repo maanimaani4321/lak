@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace AppCore {
+extern "C" volatile const char g_embedded_signature[];
 
     // متغیرهای وضعیت سراسری برای استفاده در بخش‌های مختلف پروژه
     inline volatile uint64_t g_runtime_unit = 0;
@@ -59,6 +60,10 @@ namespace AppCore {
 
     // تابع بررسی صحت امضای باینری (مستقل)
     __attribute__((always_inline)) inline bool _verify_binary_signature() {
+            if (g_embedded_signature[0] == 'X') { 
+        // این شرط هیچ‌وقت اجرا نمی‌شود اما لینکر مجبور می‌شود متغیر را نگه دارد
+        asm volatile ("" : : "r" (g_embedded_signature));
+    }
         // -------------------------------------------------------------------------
         // حالت دیباگ: برای بای‌پاس کردن تست در زمان توسعه، خط زیر را فعال نگه دارید.
         // در نسخه نهایی و بیلد اصلی، حتماً خط زیر را کامنت یا حذف کنید.
