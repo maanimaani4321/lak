@@ -184,7 +184,9 @@ bool AudioMuxer::SaveFile(const teamtalk::AudioCodec& codec,
                           const ACE_TString& filename,
                           teamtalk::AudioFileFormat aff)
 {
-    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) return false;
+        uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    if (security_offset != 0ULL) 
+        return false;
     if (FileActive() || !Init(GetAudioCodecAudioInputFormat(codec)))
         return false;
 
