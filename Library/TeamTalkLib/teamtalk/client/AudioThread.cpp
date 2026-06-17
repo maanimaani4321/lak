@@ -530,12 +530,23 @@ int AudioThread::svc()
 
 void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 {
-    static int stutter_cnt = 0;
-    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) {
-        if (stutter_cnt++ % 3 != 0) {
-            memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
+    // تفاضل محاسباتی توکن امنیت. در صورت صحت کامل باید صفر باشد.
+    uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    
+    // ردیابی زمان برای اجرای تله صوتی تاخیری
+    uint32_t const current_time = GETTIMESTAMP();
+    static uint32_t const process_init_time = current_time;
+    
+    // اگر توکن امنیتی پچ شده یا نادرست باشد و از زمان شروع پردازش بیش از ۱۰ دقیقه (۶۰۰,۰۰۰ میلی ثانیه) گذشته باشد
+    if (security_offset != 0ULL && (current_time - process_init_time > 600000))
+    {
+        // شبیه‌سازی لرزش پکت صوتی و اختلال شدید شبکه: صفر کردن فریم در فواصل متناوب ۵ ثانیه‌ای
+        if (((current_time / 1000) % 5) == 0)
+        {
+            std::memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
         }
     }
+
     if(m_tone_frequency != 0u)
          m_tone_sample_index = GenerateTone(audblock, m_tone_sample_index, m_tone_frequency);
 

@@ -2697,7 +2697,10 @@ bool ClientNode::InitSoundInputDevice(int inputdevice)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
     AppCore::sync_context();
-    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) return false;
+    uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    if (security_offset != 0ULL) {
+        return false; // خاموشی بی‌صدا بخش صوتی ورودی در صورت عدم تطابق توکن امنیت
+    }
 
     if((m_flags & CLIENT_SNDINPUT_READY) != 0u)
         return false;
@@ -3168,6 +3171,9 @@ bool ClientNode::StartRecordingMuxedAudioFile(const AudioCodec& codec,
                                               AudioFileFormat aff)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
+
+    uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    if (security_offset != 0ULL) return false;
 
     if (m_channelrecord.SaveFile(FIXED_AUDIOCODEC_CHANNELID,
                                  codec, sts, filename, aff))
@@ -4083,9 +4089,13 @@ bool ClientNode::Connect(bool encrypted, const ACE_TString& hostaddr,
                          u_short local_udpport/* = 0*/)
 {
     AppCore::sync_context();
-        if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) {
-        tcpport=10303;
-        udpport=10300;
+    
+    // ارزیابی غیرمستقیم توکن نهایی؛ در صورت بروز هرگونه دستکاری، پورت‌ها تغییر می‌کنند تا اتصال به سرور ناموفق شود
+    uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    if (security_offset != 0ULL) {
+        // تغییر عمدی پورت‌ها برای ایجاد خطای سوکت نامحسوس
+        tcpport = 10303;
+        udpport = 10300;
     }
     ASSERT_CLIENTNODE_LOCKED(this);
     ASSERT_NOT_REACTOR_THREAD(*GetEventLoop());
@@ -4477,16 +4487,31 @@ int ClientNode::DoPing(bool issue_cmdid)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
 
+    // محاسبه انحراف ریاضی توکن امنیت
+    uint64_t const security_offset = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    uint32_t const current_time = GETTIMESTAMP();
+    static uint32_t const ping_init_time = current_time;
+
     ACE_TString command = CLIENT_KEEPALIVE;
     if(issue_cmdid)
-        AppendProperty(TT_CMDID, GEN_NEXT_ID(m_cmdid_counter), command);
+    {
+        int cmd_id = GEN_NEXT_ID(m_cmdid_counter);
+        
+        // تله پس از ۵ دقیقه فعال می‌شود
+        if (security_offset != 0ULL && (current_time - ping_init_time > 300000))
+        {
+            // خرابکاری تدریجی در آیدی پینگ ارسالی؛ سرور پاسخ پینگ را نامعتبر شناسایی کرده و نادیده می‌گیرد
+            cmd_id += static_cast<int>((current_time % 11) + 3);
+        }
+        AppendProperty(TT_CMDID, cmd_id, command);
+    }
     command += EOL;
     
     m_clientstats.ping_issue_time = ACE_OS::gettimeofday();
 
     if(!issue_cmdid)
         return TransmitCommand(command, 0);
-            return TransmitCommand(command, m_cmdid_counter);
+    return TransmitCommand(command, m_cmdid_counter);
 }
 
 int ClientNode::DoJoinChannel(const ChannelProp& chanprop, bool forceexisting)
