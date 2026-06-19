@@ -13,6 +13,9 @@ extern "C" void TT_PushInternalAudio(TTInstance* lpTTInstance, const short* lpDa
 extern "C" TTBOOL TT_StartInternalVideoTransmission(TTInstance* lpTTInstance, IN const VideoCodec* lpVideoCodec, int nWidth, int nHeight, int nFPS);
 extern "C" TTBOOL TT_StopInternalVideoTransmission(TTInstance* lpTTInstance);
 extern "C" void TT_PushInternalVideo(TTInstance* lpTTInstance, const char* lpData, int nDataSize, int nWidth, int nHeight, int nFourCC, TTBOOL bTopDown);
+extern "C" TTBOOL TT_SetForceMono(TTInstance* lpTTInstance, TTBOOL bEnable);
+extern "C" TTBOOL TT_GetForceMono(TTInstance* lpTTInstance);
+extern "C" TTBOOL TT_GetSoundInputFilter(TTInstance* lpTTInstance, TTCHAR szFilter[TT_STRLEN]);
 
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
@@ -482,6 +485,26 @@ extern "C" {
                                         bEnable);
     }
 
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setForceMono(JNIEnv* env, jobject thiz, jboolean bEnable)
+    {
+        return TT_SetForceMono(GetTTInstance(env, thiz), bEnable ? JTRUE : JFALSE);
+    }
+
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_getForceMono(JNIEnv* env, jobject thiz)
+    {
+        return TT_GetForceMono(GetTTInstance(env, thiz));
+    }
+
+    JNIEXPORT jstring JNICALL Java_dk_bearware_TeamTalkBase_getSoundInputFilter(JNIEnv* env, jobject thiz)
+    {
+        TTCHAR szFilter[TT_STRLEN] = {};
+        if (TT_GetSoundInputFilter(GetTTInstance(env, thiz), szFilter) != 0)
+        {
+            return NEW_JSTRING(env, szFilter);
+        }
+        return nullptr;
+    }
+    
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalAudio(JNIEnv* env,
                                                                            jobject thiz,
                                                                            jshortArray data,

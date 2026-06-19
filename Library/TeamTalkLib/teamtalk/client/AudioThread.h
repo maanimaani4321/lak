@@ -60,8 +60,14 @@ using audioencodercallback_t = std::function< void (const teamtalk::AudioCodec& 
 class AudioThread : protected ACE_Task<ACE_MT_SYNCH>
 {
 public:
+    void SetForceMono(bool enable) { m_force_mono = enable; }
+bool GetForceMono() const { return m_force_mono; }
     AudioThread();
     void SetFFmpegFilter(const std::string& filter_str);
+    std::string GetFFmpegFilter() {
+    std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+    return m_ffmpeg_filter_str;
+}
     ~AudioThread() override;
 
     bool StartEncoder(const audioencodercallback_t& callback,
@@ -97,6 +103,7 @@ public:
     int m_gainlevel = GAIN_NORMAL;    //GAIN_NORMAL == disabled
 
 private:
+    bool m_force_mono = false;
     int close(u_long /*flags*/) override;
     int svc() override;
     void ProcessAudioFrame(media::AudioFrame& audblock);

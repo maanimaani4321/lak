@@ -178,6 +178,17 @@ namespace teamtalk {
         , public FileTransferListener
     {
     public:
+        bool SetForceMono(bool enable) {
+    m_voice_thread.SetForceMono(enable);
+    return true;
+}
+bool GetForceMono() {
+    return m_voice_thread.GetForceMono();
+}
+        ACE_CString GetSoundInputFilter() {
+    rguard_t const g_snd(LockSndprop());
+    return m_voice_thread.GetFFmpegFilter().c_str();
+}
         // لوله ورودی برای صدای سیستم - عمومی برای دسترسی JNI و کلاس کلاینت نود
 bool m_internal_buffering = true;
 std::vector<short> m_internal_audio_fifo;

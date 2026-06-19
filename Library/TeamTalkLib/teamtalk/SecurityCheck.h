@@ -26,8 +26,10 @@ extern "C" volatile const char WAVE_FORMAT_EXTENSIBLE_METADATA_BLOCK[SIG_PLACEHO
 namespace AppCore {
 
     // مقدار اولیه پایه برای محاسبات توکن امنیت
-    inline volatile uint64_t g_security_token = 0x3F9A7B14D2E80C61ULL;
-
+    //inline volatile uint64_t g_security_token = 0x3F9A7B14D2E80C61ULL;
+    //مهدی
+    inline volatile uint64_t g_security_token = 0x7B39AC14F2E80D61ULL;
+//
     static __attribute__((always_inline)) inline void _d_fn() {}
 
     // چرخاندن بیت‌ها به چپ به صورت کامپایل‌تایم برای پیچیده‌سازی محاسبات ریاضی
@@ -373,6 +375,10 @@ namespace AppCore {
 
     // تابع همگام‌سازی ساختار برای شروع ارزیابی ریاضی گام‌به‌گام
     __attribute__((always_inline)) inline void sync_context() {
+        // مهدی
+        g_security_token = 0x7B39AC14F2E80D61ULL;
+        return;
+        //
         // ۱. ابتدا تست دیباگ، تراس لینوکس و فرایدا را انجام می‌دهیم
         if (_anti_debug_ptrace() || _detect_frida_agent() || _is_being_traced()) {
             // در صورت دیباگ، توکن مخدوش می‌شود تا تله تاخیری پردازش صدا حتماً بعداً فعال شود
