@@ -1,26 +1,3 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- *
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
 #include "ClientUser.h"
 #include "ClientNodeBase.h"
 #include "ClientNodeEvent.h"
@@ -1496,7 +1473,8 @@ bool ClientUser::LaunchVoicePlayer(const teamtalk::AudioCodec& codec,
     m_voice_player = LaunchAudioPlayer(codec, sndprop, STREAMTYPE_VOICE);
     if (!m_voice_player)
         return false;
-
+if (!m_ffmpeg_filter_str.empty())
+        m_voice_player->SetFFmpegFilter(m_ffmpeg_filter_str);
     SetDirtyProps();
     m_voice_player->SetAudioBufferSize(GetAudioStreamBufferSize(STREAMTYPE_VOICE));
 
@@ -1873,5 +1851,14 @@ int ClientUser::GetAudioStreamBufferSize(StreamType stream_type) const
     case STREAMTYPE_MEDIAFILE_AUDIO :
         return m_media_buf_msec;
     default : return 0;
+    }
+}
+
+void ClientUser::SetUserSoundFilter(const std::string& filter_str)
+{
+    m_ffmpeg_filter_str = filter_str;
+    if (m_voice_player)
+    {
+        m_voice_player->SetFFmpegFilter(filter_str);
     }
 }

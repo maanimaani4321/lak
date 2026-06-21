@@ -1,26 +1,3 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- * 
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
 #include "StreamPlayers.h"
 
 #include "mystd/MyStd.h"
@@ -36,6 +13,18 @@
 #include <cstddef>
 #include <utility>
 #include <vector>
+#include <mutex>
+
+#if defined(ENABLE_FFMPEG)
+extern "C" {
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
+#include <libavutil/opt.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/samplefmt.h>
+}
+#endif
 
 constexpr auto DEBUG_PLAYBACK = 0;
 
@@ -73,6 +62,7 @@ AudioPlayer::~AudioPlayer()
     frm.streamid = m_stream_id;
     m_audio_callback(m_userid, m_streamtype, frm);
     MYTRACE(ACE_TEXT("~AudioPlayer() - %p - #%d\n"), this, m_userid);
+    FreeFFmpegFilter();
 }
 
 audiopacket_t AudioPlayer::QueuePacket(const AudioPacket& new_audpkt)
@@ -177,6 +167,63 @@ bool AudioPlayer::StreamPlayerCb(const soundsystem::OutputStreamer& streamer,
 
     bool const played = PlayBuffer(tmp_output_buffer, input_samples);
     
+#if defined(ENABLE_FFMPEG)
+    if (played)
+    {
+        std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+        if (m_filter_changed) {
+            InitFFmpegFilter(fmt.samplerate, input_channels);
+            m_filter_changed = false;
+        }
+
+        if (m_filter_graph && m_buffersrc_ctx && m_buffersink_ctx) {
+            AVFrame* frame = av_frame_alloc();
+            if (frame) {
+                frame->nb_samples = input_samples;
+                frame->format = AV_SAMPLE_FMT_S16;
+                frame->sample_rate = fmt.samplerate;
+                av_channel_layout_default(&frame->ch_layout, input_channels);
+                frame->pts = AV_NOPTS_VALUE;
+                
+                if (av_frame_get_buffer(frame, 0) >= 0) {
+                    memcpy(frame->data[0], tmp_output_buffer, input_samples * input_channels * sizeof(short));
+
+                    if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
+                        while (true) {
+                            AVFrame* out_frame = av_frame_alloc();
+                            if (av_buffersink_get_frame(m_buffersink_ctx, out_frame) < 0) {
+                                av_frame_free(&out_frame);
+                                break;
+                            }
+                            
+                            if (out_frame->format == AV_SAMPLE_FMT_S16) {
+                                int out_elements = out_frame->nb_samples * input_channels;
+                                short* out_data = (short*)out_frame->data[0];
+                                m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                            }
+                            av_frame_free(&out_frame);
+                        }
+                    }
+                }
+                av_frame_free(&frame);
+            }
+
+            int required_elements = input_samples * input_channels;
+            if (!m_filter_fifo.empty()) {
+                int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
+                memcpy(tmp_output_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
+                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
+                
+                if (copy_elements < required_elements) {
+                    memset(tmp_output_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
+                }
+            } else {
+                memset(tmp_output_buffer, 0, required_elements * sizeof(short));
+            }
+        }
+    }
+#endif
+
     if (played)
     {
         m_last_playback = GETTIMESTAMP();
@@ -924,5 +971,104 @@ int WebMPlayer::GetVideoFramesDropped(bool reset)
     return n;
 }
 #endif
+
+void AudioPlayer::SetFFmpegFilter(const std::string& filter_str)
+{
+    std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+    m_ffmpeg_filter_str = filter_str;
+    m_filter_changed = true;
+}
+
+void AudioPlayer::FreeFFmpegFilter()
+{
+#if defined(ENABLE_FFMPEG)
+    if (m_filter_graph) {
+        avfilter_graph_free(&m_filter_graph);
+        m_filter_graph = nullptr;
+        m_buffersrc_ctx = nullptr;
+        m_buffersink_ctx = nullptr;
+    }
+#endif
+    m_filter_fifo.clear();
+}
+
+bool AudioPlayer::InitFFmpegFilter(int samplerate, int channels)
+{
+#if defined(ENABLE_FFMPEG)
+    InitAVConv();
+    FreeFFmpegFilter();
+    
+    if (m_ffmpeg_filter_str.empty()) {
+        return true;
+    }
+
+    char args[512];
+    int ret = 0;
+    const AVFilter *abuffersrc  = avfilter_get_by_name("abuffer");
+    const AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
+    AVFilterInOut *outputs = avfilter_inout_alloc();
+    AVFilterInOut *inputs  = avfilter_inout_alloc();
+    
+    m_filter_graph = avfilter_graph_alloc();
+    
+    if (!outputs || !inputs || !m_filter_graph) {
+        if (outputs) avfilter_inout_free(&outputs);
+        if (inputs) avfilter_inout_free(&inputs);
+        return false;
+    }
+
+    AVChannelLayout in_ch_layout = {};
+    av_channel_layout_default(&in_ch_layout, channels);
+    char ch_layout_str[64];
+    av_channel_layout_describe(&in_ch_layout, ch_layout_str, sizeof(ch_layout_str));
+
+    snprintf(args, sizeof(args),
+             "time_base=1/%d:sample_rate=%d:sample_fmt=s16:channel_layout=%s",
+             samplerate, samplerate, ch_layout_str);
+
+    ret = avfilter_graph_create_filter(&m_buffersrc_ctx, abuffersrc, "in",
+                                       args, nullptr, m_filter_graph);
+    if (ret < 0) goto filter_init_error;
+
+    ret = avfilter_graph_create_filter(&m_buffersink_ctx, abuffersink, "out",
+                                       nullptr, nullptr, m_filter_graph);
+    if (ret < 0) goto filter_init_error;
+
+    outputs->name       = av_strdup("in");
+    outputs->filter_ctx = m_buffersrc_ctx;
+    outputs->pad_idx    = 0;
+    outputs->next       = nullptr;
+
+    inputs->name       = av_strdup("out");
+    inputs->filter_ctx = m_buffersink_ctx;
+    inputs->pad_idx    = 0;
+    inputs->next       = nullptr;
+
+    {
+        std::string final_filter = m_ffmpeg_filter_str + ",aformat=sample_fmts=s16:channel_layouts=";
+        final_filter += (channels == 2 ? "stereo" : "mono");
+        final_filter += ":sample_rates=" + std::to_string(samplerate);
+
+        ret = avfilter_graph_parse_ptr(m_filter_graph, final_filter.c_str(),
+                                       &inputs, &outputs, nullptr);
+        if (ret < 0) goto filter_init_error;
+    }
+
+    ret = avfilter_graph_config(m_filter_graph, nullptr);
+    if (ret < 0) goto filter_init_error;
+
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+    return true;
+
+filter_init_error:
+    if (inputs) avfilter_inout_free(&inputs);
+    if (outputs) avfilter_inout_free(&outputs);
+    FreeFFmpegFilter();
+    return false;
+#else
+    return false;
+#endif
+}
 
 } // namespace teamtalk

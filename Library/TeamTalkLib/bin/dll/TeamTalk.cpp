@@ -4439,6 +4439,21 @@ TEAMTALKDLL_API TTBOOL TT_StartInternalVideoTransmission(IN TTInstance* lpTTInst
         }
     }
 
+TEAMTALKDLL_API TTBOOL TT_SetUserSoundFilter(IN TTInstance* lpTTInstance, IN INT32 nUserID, IN const TTCHAR* szFilter) {
+    clientnode_t clientnode;
+    GET_CLIENTNODE_RET(clientnode, lpTTInstance, FALSE);
+
+    if (szFilter == nullptr)
+        szFilter = ACE_TEXT("");
+
+    #if defined(UNICODE)
+        ACE_CString filter_utf8 = UnicodeToUtf8(szFilter);
+        return static_cast<TTBOOL>(clientnode->SetUserSoundFilter(nUserID, filter_utf8.c_str()));
+    #else
+        return static_cast<TTBOOL>(clientnode->SetUserSoundFilter(nUserID, szFilter));
+    #endif
+}
+
 TEAMTALKDLL_API TTBOOL TT_SetForceMono(IN TTInstance* lpTTInstance, IN TTBOOL bEnable)
 {
     clientnode_t clientnode;
