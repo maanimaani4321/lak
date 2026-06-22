@@ -563,12 +563,13 @@ void AudioMuxer::ProcessAudioQueues(bool flush)
     ACE_UINT32 const diff = now - m_last_flush_time;
 
     // store the list of active sources prior to mux
-    std::vector<int> oldkeys;
-    {
-        // 'm_mutex1_preprocess' protects 'm_mutex2_mux'
-        std::unique_lock<std::recursive_mutex> const g(m_mutex1_preprocess);
+std::vector<int> oldkeys;
+{
+    // 'm_mutex1_preprocess' protects 'm_mutex2_mux'
+    std::unique_lock<std::recursive_mutex> const g(m_mutex1_preprocess);
+    std::unique_lock<std::recursive_mutex> const g2(m_mutex2_mux);
 
-        auto ii = m_usermux_queue.begin();
+    auto ii = m_usermux_queue.begin();
         for (; ii != m_usermux_queue.end(); ++ii)
             oldkeys.push_back(ii->first);
 
