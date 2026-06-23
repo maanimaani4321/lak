@@ -9,7 +9,7 @@ namespace teamtalk {
 
 struct KwsInternalState {
     std::recursive_mutex mutex;
-    std::unique_ptr<sherpa_onnx::cxx::VoiceActivityDetector> vad; // مدل ۲۰۰ کیلوبایتی VAD سبک
+    std::unique_ptr<sherpa_onnx::cxx::VoiceActivityDetector> vad; // مدل سبک و بهینه VAD
     std::unique_ptr<sherpa_onnx::cxx::KeywordSpotter> spotter;
     std::unique_ptr<sherpa_onnx::cxx::OnlineStream> stream;
     std::unique_ptr<sherpa_onnx::cxx::LinearResampler> resampler;
@@ -55,15 +55,21 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
     }
 
     try {
-        // ۱. مقداردهی اولیه مدل سبک VAD برای تشخیص صدای انسان
+        // ۱. تنظیم بهینه پارامترهای VAD برای مقابله با چیده شدن ابتدای گفتار و مصرف باتری ایده آل
         sherpa_onnx::cxx::VadModelConfig vad_config;
         vad_config.silero_vad.model = vad_path.c_str();
-        vad_config.silero_vad.threshold = 0.5f;
+        
+        // کاهش آستانه به 0.35 تا لبه‌های صدا و شروع‌های آرام هم شکار شده و کلمه از ابتدا کامل ذخیره شود
+        vad_config.silero_vad.threshold = 0.35f; 
+        
         vad_config.silero_vad.min_silence_duration = 0.5f;
-        vad_config.silero_vad.min_speech_duration = 0.25f;
+        
+        // کاهش مدت زمان تایید شروع کلام به ۱۰۰ میلی‌ثانیه تا تاخیر روشن شدن VAD کلمه را قیچی نکند
+        vad_config.silero_vad.min_speech_duration = 0.10f; 
+        
         vad_config.silero_vad.window_size = 512;
         vad_config.sample_rate = 16000;
-        vad_config.num_threads = 1; // برای VAD ۱ ترد کاملاً کافی است
+        vad_config.num_threads = 1; // ۱ ترد برای پردازش پس‌زمینه VAD بسیار کم‌مصرف است
         vad_config.provider = "cpu";
 
         g_state.vad = std::make_unique<sherpa_onnx::cxx::VoiceActivityDetector>(
@@ -75,7 +81,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
             return false;
         }
 
-        // ۲. مقداردهی اولیه مدل اصلی KWS برای تشخیص کلمات
+        // ۲. تنظیم پارامترهای حساسیت KWS برای گفتار طبیعی و محاوره‌ای
         sherpa_onnx::cxx::KeywordSpotterConfig config;
         config.feat_config.sample_rate = 16000;
         config.feat_config.feature_dim = 80;
@@ -85,13 +91,17 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         config.model_config.transducer.joiner = joiner_path;
         config.model_config.tokens = tokens_path;
         config.model_config.bpe_vocab = bpe_path;
-        config.model_config.num_threads = 2; 
+        config.model_config.num_threads = 2; // تعادل ایده آل پردازش همزمان و باتری گوشی
         config.model_config.provider = "cpu";
 
         config.keywords_file = keywords_path;
         config.max_active_paths = 4;
-        config.keywords_score = 1.5f;
-        config.keywords_threshold = 0.25f;
+        
+        // بالا بردن ضریب تقویت کلمات هدف به منظور سهولت در فعالسازی بدون رباتیک صحبت کردن
+        config.keywords_score = 2.0f;
+        
+        // کاهش آستانه تصمیم به 0.15 تا نوسانات و عدم انطباق‌های لحن صوتی مانع تشخیص طبیعی نشوند
+        config.keywords_threshold = 0.15f;
 
         g_state.spotter = std::make_unique<sherpa_onnx::cxx::KeywordSpotter>(
             sherpa_onnx::cxx::KeywordSpotter::Create(config)
@@ -134,9 +144,11 @@ void KwsStop(JNIEnv* env) {
     if (!g_state.active) return;
 
     g_state.active = false;
-    g_state.vad.reset();
-    g_state.spotter.reset();
-    g_state.stream.reset();
+    
+    // رعایت زنجیره آزادسازی ایده آل منابع (مخرب ها به ترتیب وابستگی) برای پایداری در سطح سیستم عامل اندروید
+    g_state.stream.reset();   
+    g_state.spotter.reset();  
+    g_state.vad.reset();      
     g_state.resampler.reset();
 
     if (g_state.java_listener_ref && env) {
@@ -184,7 +196,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         mono_float[i] = sum / (channels * 32768.0f);
     }
 
-    // ۲. بررسی و ایجاد رساپلر به ۱۶۰۰۰ هرتز در صورت تغییر فرکانس
+    // ۲. رساپلر پویا به فرکانس ۱۶ کیلوهرتز در صورت لزوم
     if (!g_state.resampler || g_state.current_samplerate != samplerate) {
         g_state.resampler = std::make_unique<sherpa_onnx::cxx::LinearResampler>(
             sherpa_onnx::cxx::LinearResampler::Create(samplerate, 16000, 0, 6)
@@ -195,27 +207,36 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
     std::vector<float> resampled = g_state.resampler->Resample(mono_float.data(), mono_float.size(), false);
 
     if (!resampled.empty()) {
-        // ۳. ابتدا صدا را به مدل سبک VAD می‌دهیم تا چک کند آیا صدای انسان است یا خیر
+        // ۳. بررسی صدا در فاز سبک VAD
         g_state.vad->AcceptWaveform(resampled.data(), resampled.size());
 
-        // ۴. تنها در صورتی که سگمنت فعال صحبت انسان تشخیص داده شود، بخش KWS به کار می‌افتد (کاهش چشمگیر مصرف باتری و CPU)
+        // ۴. حلقه پردازش سگمنت‌های حاوی گفتار صادرشده از VAD
         while (!g_state.vad->IsEmpty()) {
             auto segment = g_state.vad->Front();
             g_state.vad->Pop();
 
             if (!segment.samples.empty()) {
-                // ارسال بخش بریده شده و تایید شده صدای انسان به موتور کلمات کلیدی KWS
+                // ریست کردن استریم دکودر قبل از فرستادن سگمنت صوتی جدید برای رفع باگ کرش ابعاد ONNX
                 g_state.spotter->Reset(g_state.stream.get());
+
+                // ارسال صدای انسانِ تایید شده به موتور KWS
                 g_state.stream->AcceptWaveform(16000, segment.samples.data(), segment.samples.size());
 
+                // بررسی فوری و بلادرنگ نتایج در داخل لوپ IsReady جهت به حداقل رساندن لیتنسی بیدارباش
                 while (g_state.spotter->IsReady(g_state.stream.get())) {
                     g_state.spotter->Decode(g_state.stream.get());
-                }
 
-                auto result = g_state.spotter->GetResult(g_state.stream.get());
-                if (!result.keyword.empty()) {
-                    NotifyJavaListener(result.keyword);
-                    g_state.spotter->Reset(g_state.stream.get());
+                    auto result = g_state.spotter->GetResult(g_state.stream.get());
+                    if (!result.keyword.empty()) {
+                        // اطلاع رسانی تشخیص به اپلیکیشن
+                        NotifyJavaListener(result.keyword);
+                        
+                        // بازنشانی وضعیت پس از تشخیص
+                        g_state.spotter->Reset(g_state.stream.get());
+                        
+                        // شکستن حلقه پس از تایید بیدارباش جهت جلوگیری از تحلیل بیهوده مابقی این سگمنت و ذخیره حداکثری شارژ باتری
+                        break; 
+                    }
                 }
             }
         }
