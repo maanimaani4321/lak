@@ -4,6 +4,20 @@ project (TeamTalk5Lib LANGUAGES CXX)
 # dependency hell
 set (CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+  add_library(onnxruntime SHARED IMPORTED GLOBAL)
+  set_target_properties(onnxruntime PROPERTIES
+      IMPORTED_LOCATION ${CMAKE_CURRENT_LIST_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libonnxruntime.so)
+
+  add_library(sherpa-onnx-c-api SHARED IMPORTED GLOBAL)
+  set_target_properties(sherpa-onnx-c-api PROPERTIES
+      IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-c-api.so)
+
+  add_library(sherpa-onnx-cxx-api SHARED IMPORTED GLOBAL)
+  set_target_properties(sherpa-onnx-cxx-api PROPERTIES
+      IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-cxx-api.so)
+endif()
+
 include (FeatureSummary)
 
 set (TEAMTALKLIB_ROOT ${CMAKE_CURRENT_LIST_DIR})
@@ -167,7 +181,11 @@ if (BUILD_TEAMTALK_LIBRARY_DLL)
 
   target_include_directories (TeamTalk5DLL PRIVATE ${TTCLIENTDLL_INCLUDE_DIR} INTERFACE ${TEAMTALK_ROOT}/Library/TeamTalk_DLL)
   target_compile_options (TeamTalk5DLL PRIVATE ${TTCLIENTDLL_COMPILE_FLAGS} ${COMPILE_FLAGS})
-  target_link_libraries (TeamTalk5DLL PRIVATE ${TTCLIENTDLL_LINK_FLAGS} ${LINK_LIBS})
+  if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    target_link_libraries (TeamTalk5DLL PRIVATE ${TTCLIENTDLL_LINK_FLAGS} ${LINK_LIBS} onnxruntime sherpa-onnx-c-api sherpa-onnx-cxx-api)
+  else()
+    target_link_libraries (TeamTalk5DLL PRIVATE ${TTCLIENTDLL_LINK_FLAGS} ${LINK_LIBS})
+  endif()
   set_target_properties (TeamTalk5DLL PROPERTIES OUTPUT_NAME TeamTalk5)
 
   if (MSVC AND ${CMAKE_SIZEOF_VOID_P} EQUAL 4)
@@ -248,7 +266,11 @@ if (BUILD_TEAMTALK_LIBRARY_DLLPRO)
   target_compile_options (TeamTalk5ProDLL PRIVATE
     ${TTCLIENTPRODLL_COMPILE_FLAGS} ${COMPILE_FLAGS})
 
-  target_link_libraries (TeamTalk5ProDLL PRIVATE ${TTCLIENTPRODLL_LINK_FLAGS} ${LINK_LIBS})
+  if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    target_link_libraries (TeamTalk5ProDLL PRIVATE ${TTCLIENTPRODLL_LINK_FLAGS} ${LINK_LIBS} onnxruntime sherpa-onnx-c-api sherpa-onnx-cxx-api)
+  else()
+    target_link_libraries (TeamTalk5ProDLL PRIVATE ${TTCLIENTPRODLL_LINK_FLAGS} ${LINK_LIBS})
+  endif()
 
   if (MSVC AND ${CMAKE_SIZEOF_VOID_P} EQUAL 4)
     target_link_options (TeamTalk5ProDLL PRIVATE /NODEFAULTLIB:MSVCRT /NODEFAULTLIB:vcruntime.lib)

@@ -510,7 +510,8 @@ extern "C" {
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startKws(
         JNIEnv* env, jobject thiz,
         jstring encoder_path, jstring decoder_path, jstring joiner_path,
-        jstring tokens_path, jstring bpe_path, jstring keywords_path)
+        jstring tokens_path, jstring bpe_path, jstring keywords_path,
+        jstring vad_path) // اضافه شدن پارامتر هفتم
     {
         auto to_std_str = [&](jstring jstr) -> std::string {
             if (!jstr) return "";
@@ -526,12 +527,13 @@ extern "C" {
         std::string tok = to_std_str(tokens_path);
         std::string bpe = to_std_str(bpe_path);
         std::string kws_file = to_std_str(keywords_path);
+        std::string vad = to_std_str(vad_path);
 
         JavaVM* vm = nullptr;
         env->GetJavaVM(&vm);
         teamtalk::KwsInit(vm);
 
-        return teamtalk::KwsStart(env, thiz, enc, dec, join, tok, bpe, kws_file) ? JTRUE : JFALSE;
+        return teamtalk::KwsStart(env, thiz, enc, dec, join, tok, bpe, kws_file, vad) ? JTRUE : JFALSE;
     }
 
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_stopKws(JNIEnv* env, jobject thiz)
