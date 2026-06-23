@@ -168,61 +168,71 @@ bool AudioPlayer::StreamPlayerCb(const soundsystem::OutputStreamer& streamer,
     bool const played = PlayBuffer(tmp_output_buffer, input_samples);
     
 #if defined(ENABLE_FFMPEG)
-    if (played)
-    {
-        std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-        if (m_filter_changed) {
-            InitFFmpegFilter(fmt.samplerate, input_channels);
-            m_filter_changed = false;
+        bool should_process_filter = false;
+        if (played) {
+            should_process_filter = true;
+            m_silence_feed_counter = 0; // ریست تایمر سکوت به محض شنیده شدن صدای کاربر
+        } else if (m_silence_feed_counter < 3000) { // تزریق سکوت تا حداکثر ۳ ثانیه برای فروکش کردن طنین افکت
+            should_process_filter = true;
+            int const frame_msec = PCM16_SAMPLES_DURATION(input_samples, fmt.samplerate);
+            m_silence_feed_counter += frame_msec;
         }
 
-        if (m_filter_graph && m_buffersrc_ctx && m_buffersink_ctx) {
-            AVFrame* frame = av_frame_alloc();
-            if (frame) {
-                frame->nb_samples = input_samples;
-                frame->format = AV_SAMPLE_FMT_S16;
-                frame->sample_rate = fmt.samplerate;
-                av_channel_layout_default(&frame->ch_layout, input_channels);
-                frame->pts = AV_NOPTS_VALUE;
-                
-                if (av_frame_get_buffer(frame, 0) >= 0) {
-                    memcpy(frame->data[0], tmp_output_buffer, input_samples * input_channels * sizeof(short));
+        if (should_process_filter)
+        {
+            std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+            if (m_filter_changed) {
+                InitFFmpegFilter(fmt.samplerate, input_channels);
+                m_filter_changed = false;
+            }
 
-                    if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
-                        while (true) {
-                            AVFrame* out_frame = av_frame_alloc();
-                            if (av_buffersink_get_frame(m_buffersink_ctx, out_frame) < 0) {
+            if (m_filter_graph && m_buffersrc_ctx && m_buffersink_ctx) {
+                AVFrame* frame = av_frame_alloc();
+                if (frame) {
+                    frame->nb_samples = input_samples;
+                    frame->format = AV_SAMPLE_FMT_S16;
+                    frame->sample_rate = fmt.samplerate;
+                    av_channel_layout_default(&frame->ch_layout, input_channels);
+                    frame->pts = AV_NOPTS_VALUE;
+                    
+                    if (av_frame_get_buffer(frame, 0) >= 0) {
+                        memcpy(frame->data[0], tmp_output_buffer, input_samples * input_channels * sizeof(short));
+
+                        if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
+                            while (true) {
+                                AVFrame* out_frame = av_frame_alloc();
+                                if (av_buffersink_get_frame(m_buffersink_ctx, out_frame) < 0) {
+                                    av_frame_free(&out_frame);
+                                    break;
+                                }
+                                
+                                if (out_frame->format == AV_SAMPLE_FMT_S16) {
+                                    int out_elements = out_frame->nb_samples * input_channels;
+                                    short* out_data = (short*)out_frame->data[0];
+                                    m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                                }
                                 av_frame_free(&out_frame);
-                                break;
                             }
-                            
-                            if (out_frame->format == AV_SAMPLE_FMT_S16) {
-                                int out_elements = out_frame->nb_samples * input_channels;
-                                short* out_data = (short*)out_frame->data[0];
-                                m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
-                            }
-                            av_frame_free(&out_frame);
                         }
                     }
+                    av_frame_free(&frame);
                 }
-                av_frame_free(&frame);
-            }
 
-            int required_elements = input_samples * input_channels;
-            if (!m_filter_fifo.empty()) {
-                int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
-                memcpy(tmp_output_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
-                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
-                
-                if (copy_elements < required_elements) {
-                    memset(tmp_output_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
+                int required_elements = input_samples * input_channels;
+                if (!m_filter_fifo.empty()) {
+                    int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
+                    memcpy(tmp_output_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
+                    m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
+                    
+                    if (copy_elements < required_elements) {
+                        memset(tmp_output_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
+                    }
+                } else {
+                    memset(tmp_output_buffer, 0, required_elements * sizeof(short));
                 }
-            } else {
-                memset(tmp_output_buffer, 0, required_elements * sizeof(short));
             }
         }
-    }
-#endif
+    #endif
 
     if (played)
     {
