@@ -19,7 +19,7 @@ struct KwsInternalState {
     bool active = false;
     int current_samplerate = 0;
 
-    // بهینه‌سازی: برای جلوگیری از تخصیص حافظه مکرر روی Heap در ترد صوتی
+    // بهینه‌سازی: جلوگیری از تخصیص مکرر حافظه در ترد صدا
     std::vector<float> mono_buffer;
 };
 
@@ -58,6 +58,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
     }
 
     try {
+        // ۱. پیکربندی و راه‌اندازی مدل VAD برای کاهش مصرف باتری و پردازنده
         sherpa_onnx::cxx::VadModelConfig vad_config;
         vad_config.silero_vad.model = vad_path.c_str();
         vad_config.silero_vad.threshold = 0.35f; 
@@ -77,6 +78,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
             return false;
         }
 
+        // ۲. تنظیمات مربوط به موتور تشخیص کلمه کلیدی (KWS)
         sherpa_onnx::cxx::KeywordSpotterConfig config;
         config.feat_config.sample_rate = 16000;
         config.feat_config.feature_dim = 80;
@@ -102,6 +104,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
             return false;
         }
 
+        // ۳. ساخت لوله مداوم صوتی که در کل طول اجرای برنامه زنده می‌ماند
         g_state.stream = std::make_unique<sherpa_onnx::cxx::OnlineStream>(
             g_state.spotter->CreateStream()
         );
@@ -171,12 +174,11 @@ static void NotifyJavaListener(const std::string& keyword) {
 }
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
-    // اصلاح ۱: محصور کردن در try-catch برای جلوگیری از هرگونه کرش ناگهانی اپلیکیشن
     try {
         std::lock_guard<std::recursive_mutex> lock(g_state.mutex);
         if (!g_state.active || !g_state.stream || !g_state.spotter || !g_state.vad) return;
 
-        // اصلاح ۲: استفاده از بردار پیش‌تخصیص‌یافته به جای تخصیص حافظه مکرر روی heap
+        // تبدیل کانال‌ها و نمونه‌ها به حالت مونو فلوت
         g_state.mono_buffer.resize(samples);
         for (int i = 0; i < samples; ++i) {
             float sum = 0.0f;
@@ -186,6 +188,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             g_state.mono_buffer[i] = sum / (channels * 32768.0f);
         }
 
+        // بررسی و ساخت نمونه LinearResampler در صورت نیاز
         if (!g_state.resampler || g_state.current_samplerate != samplerate) {
             g_state.resampler = std::make_unique<sherpa_onnx::cxx::LinearResampler>(
                 sherpa_onnx::cxx::LinearResampler::Create(samplerate, 16000, 0, 6)
@@ -196,21 +199,20 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         std::vector<float> resampled = g_state.resampler->Resample(g_state.mono_buffer.data(), g_state.mono_buffer.size(), false);
 
         if (!resampled.empty()) {
+            // صدا ابتدا به VAD فرستاده می‌شود تا سکوت را نادیده بگیرد
             g_state.vad->AcceptWaveform(resampled.data(), resampled.size());
 
+            // واکشی سگمنت‌های گفتاری از VAD
             while (!g_state.vad->IsEmpty()) {
                 auto segment = g_state.vad->Front();
                 g_state.vad->Pop();
 
                 if (!segment.samples.empty()) {
-                    // اصلاح ۳: بازسازی کامل استریم صوتی (Stream Recreation) صوتی به جای ریست کردن معمولی
-                    // این کار بافرهای ویژگی گیر افتاده فریم صوتی را کاملا خالی می‌کند و مانع خطای Reshape (mismatch 17 to 16) می‌شود.
-                    g_state.stream = std::make_unique<sherpa_onnx::cxx::OnlineStream>(
-                        g_state.spotter->CreateStream()
-                    );
-
+                    // تزریق مستقیم نمونه‌های صوتی به لوله صوتی مداوم (g_state.stream)
+                    // این لوله برای جلوگیری از باگ ۱۷ فریم هرگز مجدداً ساخته (recreate) نمی‌شود.
                     g_state.stream->AcceptWaveform(16000, segment.samples.data(), segment.samples.size());
 
+                    // پردازش فریم‌ها تا زمانی که استریم آماده باشد
                     while (g_state.spotter->IsReady(g_state.stream.get())) {
                         g_state.spotter->Decode(g_state.stream.get());
 
@@ -218,25 +220,20 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                         if (!result.keyword.empty()) {
                             NotifyJavaListener(result.keyword);
                             
-                            // بازسازی مجدد برای تمیز شدن بافرهای صدا پس از تشخیص موفق
-                            g_state.stream = std::make_unique<sherpa_onnx::cxx::OnlineStream>(
-                                g_state.spotter->CreateStream()
-                            );
-                            break; 
+                            // ریست فرضیات آکوستیک بدون تخریب فیزیکی لوله استریم صوتی
+                            g_state.spotter->Reset(g_state.stream.get());
                         }
                     }
                 }
             }
         }
     } catch (const std::exception& e) {
-        // مدیریت خطا: آزادسازی و بازنشانی استریم جهت بازیابی وضعیت بدون کرش کردن برنامه
-        if (g_state.spotter) {
-            g_state.stream = std::make_unique<sherpa_onnx::cxx::OnlineStream>(
-                g_state.spotter->CreateStream()
-            );
+        // بازنشانی وضعیت در لایه آکوستیک برای جلوگیری از توقف ترد در صورت بروز خطا
+        if (g_state.spotter && g_state.stream) {
+            g_state.spotter->Reset(g_state.stream.get());
         }
     } catch (...) {
-        // نادیده گرفتن سایر خطاهای ناشناخته
+        // مدیریت سایر خطاهای احتمالی
     }
 }
 
