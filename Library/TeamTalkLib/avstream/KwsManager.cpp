@@ -4,9 +4,8 @@
 #include <vector>
 #include <algorithm>
 #include <cstring>
-#include <android/log.h> // اضافه شدن هدر لاگ اندروید برای دیباگ بومی
+#include <android/log.h> // هدر لاگ اندروید برای دیباگ بومی
 
-// تعریف مکرو برای لاگ فارسی با برچسب مشخص جهت فیلتر راحت در Logcat
 #define LOG_TAG "TeamTalk_KWS"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
@@ -23,6 +22,9 @@ static jmethodID g_callback_method_id = nullptr;
 static bool g_active = false;
 static int g_current_samplerate = 0;
 static std::vector<float> g_mono_buffer;
+
+// بافر حلقوی صوتی برای تغذیه VAD در قالب بلوک‌های دقیق ۵۱۲ نمونه‌ای
+static std::vector<float> g_vad_buffer;
 
 // مدیریت ماشین وضعیت و لوله صوتی
 static int g_silence_samples_counter = 56000; 
@@ -138,6 +140,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         g_silence_samples_counter = 56000; 
         g_kws_pipe_reset_done = true;
         g_pre_roll_buffer.clear();
+        g_vad_buffer.clear();
 
         LOGE("[سی‌پلاس‌پلاس] موتور بیداری با موفقیت شروع به کار کرد.");
         return true;
@@ -179,6 +182,7 @@ void KwsStop(JNIEnv* env) {
     
     g_mono_buffer.clear();
     g_pre_roll_buffer.clear();
+    g_vad_buffer.clear();
 
     if (g_java_listener_ref && env) {
         env->DeleteGlobalRef(g_java_listener_ref);
@@ -244,26 +248,32 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         );
 
         if (resampled_output && resampled_output->samples && resampled_output->n > 0) {
-            // ۱. فید مداوم صدا به مدل تشخیص صدا (VAD)
-            SherpaOnnxVoiceActivityDetectorAcceptWaveform(g_vad, resampled_output->samples, resampled_output->n);
+            
+            // الف) تجمیع نمونه‌های جدید صوتی در بافر VAD جهت فیلتر نویز ابعاد ONNX
+            g_vad_buffer.insert(g_vad_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
 
-            // ۲. تخلیه آنی و بومی صف سگمنت‌های VAD برای جلوگیری از پر شدن حافظه
+            // ب) فید دادن صوتی به VAD *فقط و فقط* در قالب بلوک‌های دقیق ۵۱۲ نمونه‌ای
+            while (g_vad_buffer.size() >= 512) {
+                SherpaOnnxVoiceActivityDetectorAcceptWaveform(g_vad, g_vad_buffer.data(), 512);
+                g_vad_buffer.erase(g_vad_buffer.begin(), g_vad_buffer.begin() + 512);
+            }
+
+            // ۲. تخلیه آنی صف سگمنت‌های بومی VAD
             SherpaOnnxVoiceActivityDetectorClear(g_vad);
 
-            // ۳. دریافت وضعیت آنی تشخیص صدای انسان
+            // ۳. دریافت وضعیت آنی تشخیص صدای انسان (بدون خطای ابعاد ONNX)
             bool speech_detected_now = (SherpaOnnxVoiceActivityDetectorDetected(g_vad) == 1);
 
             // زمان بیداری صوتی (۳.۵ ثانیه در فرکانس ۱۶ کیلوهرتز)
             const int max_silence_samples = 3.5 * 16000; 
 
             if (speech_detected_now) {
-                // اگر فعالیت انسان تازه تشخیص داده شد، بافر سکوت قبل از کلمه را تزریق کن
                 if (g_silence_samples_counter >= max_silence_samples && !g_pre_roll_buffer.empty()) {
                     LOGE("[سی‌پلاس‌پلاس] صدای انسان شنیده شد! در حال تزریق بافر پیش‌رو...");
                     SherpaOnnxOnlineStreamAcceptWaveform(g_stream, 16000, g_pre_roll_buffer.data(), g_pre_roll_buffer.size());
                     g_pre_roll_buffer.clear();
                 }
-                g_silence_samples_counter = 0; // ریست شمارنده سکوت
+                g_silence_samples_counter = 0; 
                 g_kws_pipe_reset_done = false;
             } else {
                 g_silence_samples_counter += resampled_output->n;
@@ -284,7 +294,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                 const SherpaOnnxKeywordResult* result = SherpaOnnxGetKeywordResult(g_spotter, g_stream);
                 if (result) {
                     if (result->keyword && std::strlen(result->keyword) > 0) {
-                        LOGE("[سی‌پلاس‌پلاس] کلمه شکار شد: %s", result->keyword);
+                        LOGE("[سی‌پلاس‌پلاس] کلمه بیداری با موفقیت تشخیص داده شد: %s", result->keyword);
                         NotifyJavaListener(result->keyword);
                         SherpaOnnxResetKeywordStream(g_spotter, g_stream);
                     }
@@ -293,7 +303,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             } else {
                 // ۵. صرفه‌جویی شدید در مصرف باتری در صورت سکوت طولانی‌مدت (بیش از ۳.۵ ثانیه):
                 if (!g_kws_pipe_reset_done) {
-                    LOGE("[سی‌پلاس‌پلاس] ۳.۵ ثانیه سکوت! بازنشانی و معلق کردن موقت استریم KWS...");
+                    LOGE("[سی‌پلاس‌پلاس] سکوت طولانی؛ استریم موقتاً ریست شد.");
                     SherpaOnnxResetKeywordStream(g_spotter, g_stream); 
                     g_kws_pipe_reset_done = true;
                     g_pre_roll_buffer.clear();
