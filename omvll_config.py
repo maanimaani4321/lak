@@ -27,5 +27,5 @@ class MyConfig(omvll.ObfuscationConfig):
         return omvll.BasicBlockDuplicateWithProbability(10)
 
 @lru_cache(maxsize=1)
-def omvll_get_config(module):
+def omvll_get_config():
     return MyConfig()
