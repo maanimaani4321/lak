@@ -507,11 +507,60 @@ extern "C" {
         return nullptr;
     }
     
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startKwsEx(
+        JNIEnv* env, jobject thiz,
+        jstring encoder_path, jstring decoder_path, jstring joiner_path,
+        jstring tokens_path, jstring bpe_path, jstring keywords_path,
+        jstring vad_path, jstring wespeaker_path, jfloat vad_threshold,
+        jboolean speaker_verify_enabled, jfloat speaker_verify_threshold,
+        jfloatArray target_speaker_embedding)
+    {
+        auto to_std_str = [&](jstring jstr) -> std::string {
+            if (!jstr) return "";
+            const char* chars = env->GetStringUTFChars(jstr, nullptr);
+            std::string s(chars);
+            env->ReleaseStringUTFChars(jstr, chars);
+            return s;
+        };
+
+        std::string enc = to_std_str(encoder_path);
+        std::string dec = to_std_str(decoder_path);
+        std::string join = to_std_str(joiner_path);
+        std::string tok = to_std_str(tokens_path);
+        std::string bpe = to_std_str(bpe_path);
+        std::string kws_file = to_std_str(keywords_path);
+        std::string vad = to_std_str(vad_path);
+        std::string wespeaker = to_std_str(wespeaker_path);
+
+        std::vector<float> target_emb;
+        if (target_speaker_embedding != nullptr) {
+            jsize len = env->GetArrayLength(target_speaker_embedding);
+            if (len > 0) {
+                target_emb.resize(len);
+                env->GetFloatArrayRegion(target_speaker_embedding, 0, len, target_emb.data());
+            }
+        }
+
+        JavaVM* vm = nullptr;
+        env->GetJavaVM(&vm);
+        teamtalk::KwsInit(vm);
+
+        return teamtalk::KwsStartEx(env, thiz, enc, dec, join, tok, bpe, kws_file, vad,
+                                    wespeaker, vad_threshold, speaker_verify_enabled,
+                                    speaker_verify_threshold, target_emb) ? JTRUE : JFALSE;
+    }
+
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startSpeakerEnrollment(
+        JNIEnv* env, jobject thiz)
+    {
+        return teamtalk::KwsStartSpeakerEnrollment(env) ? JTRUE : JFALSE;
+    }
+    
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startKws(
         JNIEnv* env, jobject thiz,
         jstring encoder_path, jstring decoder_path, jstring joiner_path,
         jstring tokens_path, jstring bpe_path, jstring keywords_path,
-        jstring vad_path) // اضافه شدن پارامتر هفتم
+        jstring vad_path)
     {
         auto to_std_str = [&](jstring jstr) -> std::string {
             if (!jstr) return "";
