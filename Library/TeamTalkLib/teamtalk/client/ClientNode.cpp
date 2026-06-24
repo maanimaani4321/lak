@@ -3104,7 +3104,6 @@ bool ClientNode::MuteAll(bool muteall)
 
 bool ClientNode::SetVoiceGainLevel(int gainlevel)
 {
-    int gainlevel = (AppCore::g_runtime_unit == 0x55AA55AAFF66B489ULL) ? gainlevel : 0;
     rguard_t const g_snd(LockSndprop());
 
     switch (m_soundprop.preprocessor.preprocessor)
