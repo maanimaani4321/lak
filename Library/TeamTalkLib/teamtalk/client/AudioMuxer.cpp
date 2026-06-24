@@ -164,6 +164,8 @@ bool AudioMuxer::FileActive()
 
 #if defined(ENABLE_MEDIAFOUNDATION)
     fileactive |= bool(m_mp3encoder);
+#elif defined(ENABLE_LAME)
+    fileactive |= bool(m_mp3encoder);
 #endif
 
 #if defined(ENABLE_SPEEXFILE)
@@ -209,6 +211,11 @@ bool AudioMuxer::SaveFile(const teamtalk::AudioCodec& codec,
         int mp3bitrate = AFFToMP3Bitrate(aff);
         media::AudioFormat fmt(samplerate, channels);
         m_mp3encoder = MFTransform::CreateMP3(fmt, mp3bitrate, filename.c_str());
+        success = bool(m_mp3encoder);
+#elif defined(ENABLE_LAME)
+        int mp3bitrate = AFFToMP3Bitrate(aff);
+        media::AudioFormat fmt(samplerate, channels);
+        m_mp3encoder = LameEncoder::CreateMP3(fmt, mp3bitrate, filename);
         success = bool(m_mp3encoder);
 #endif
     }
@@ -296,6 +303,8 @@ void AudioMuxer::CloseFile()
     }
 
 #if defined(ENABLE_MEDIAFOUNDATION)
+    m_mp3encoder.reset();
+#elif defined(ENABLE_LAME)
     m_mp3encoder.reset();
 #endif
 }
@@ -844,6 +853,11 @@ void AudioMuxer::WriteAudio(int cb_samples, teamtalk::StreamTypes sts)
 #endif
 
 #if defined(ENABLE_MEDIAFOUNDATION)
+    if(m_mp3encoder && m_inputformat.samples)
+    {
+        m_mp3encoder->ProcessAudioEncoder(frame, true);
+    }
+#elif defined(ENABLE_LAME)
     if(m_mp3encoder && m_inputformat.samples)
     {
         m_mp3encoder->ProcessAudioEncoder(frame, true);

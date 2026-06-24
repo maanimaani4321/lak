@@ -34,6 +34,8 @@
 
 #if defined(ENABLE_MEDIAFOUNDATION)
 #include "avstream/MFTransform.h"
+#elif defined(ENABLE_LAME)
+#include "codec/LameEncoder.h"
 #endif
 
 #if defined(ENABLE_OGG)
@@ -137,6 +139,8 @@ private:
     wavepcmfile_t m_wavefile;
 #if defined(ENABLE_MEDIAFOUNDATION)
     mftransform_t m_mp3encoder;
+#elif defined(ENABLE_LAME)
+    lame_encoder_t m_mp3encoder;
 #endif
 
 #if defined(ENABLE_SPEEXFILE)

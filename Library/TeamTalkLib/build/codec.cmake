@@ -46,3 +46,19 @@ if (FEATURE_OPUSTOOLS)
   list (APPEND CODEC_COMPILE_FLAGS -DENABLE_OPUSTOOLS)
   list (APPEND CODEC_LINK_FLAGS ${OPUSTOOLS_LINK_FLAGS})
 endif()
+
+if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+  include(FetchContent)
+  FetchContent_Declare(
+      lame
+      GIT_REPOSITORY https://github.com/Iunusov/libmp3lame-CMAKE.git
+      GIT_TAG        master
+  )
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(lame)
+
+  list (APPEND CODEC_COMPILE_FLAGS -DENABLE_LAME)
+  list (APPEND CODEC_LINK_FLAGS mp3lame)
+  list (APPEND CODEC_SOURCES ${TEAMTALKLIB_ROOT}/codec/LameEncoder.cpp)
+  list (APPEND CODEC_HEADERS ${TEAMTALKLIB_ROOT}/codec/LameEncoder.h)
+endif()

@@ -131,6 +131,19 @@ VoiceLog::VoiceLog(int userid, const ACE_TString& filename,
             return;
         }
     }
+#elif defined(ENABLE_LAME)
+    {
+        int mp3bitrate = AFFToMP3Bitrate(aff);
+        m_lameencoder = LameEncoder::CreateMP3(media::AudioFormat(samplerate, channels), mp3bitrate, filename);
+        if (!m_lameencoder)
+        {
+            ACE_TString error = ACE_TEXT("Failed to open file ") + filename;
+            TT_ERROR(error.c_str());
+            m_active = false;
+            m_lameencoder.reset();
+            return;
+        }
+    }
 #endif
     break;
     case AFF_WAVE_FORMAT :
@@ -417,6 +430,13 @@ void VoiceLog::WriteAudio(int packet_no)
         int samples = GetAudioCodecCbSamples(m_codec);
         m_mp3transform->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], samples), true);
     }
+#elif defined(ENABLE_LAME)
+    if (m_lameencoder)
+    {
+        media::AudioFormat fmt = GetAudioCodecAudioFormat(m_codec);
+        int samples = GetAudioCodecCbSamples(m_codec);
+        m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], samples), true);
+    }
 #endif
     if(m_wavfile)
         m_wavfile->AppendSamples(m_samples_buf.data(), GetAudioCodecCbSamples(m_codec));
@@ -440,6 +460,9 @@ void VoiceLog::WriteSilence(int msecs)
 #if defined(ENABLE_MEDIAFOUNDATION)
         if(m_mp3transform)
             m_mp3transform->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], cbsamples), true);
+#elif defined(ENABLE_LAME)
+        if(m_lameencoder)
+            m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], cbsamples), true);
 #endif
         if(m_wavfile)
             m_wavfile->AppendSamples(m_samples_buf.data(), GetAudioCodecCbSamples(m_codec));
