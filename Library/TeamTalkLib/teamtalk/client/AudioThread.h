@@ -80,6 +80,7 @@ public:
 
     // متد عمومی جهت دریافت بایت‌های صوتی مستقیم از کلاینت نود
     void FeedToInsertAudioBlock(const short* buffer, int samples);
+    bool m_internal_buffering = true;
 
     int m_voiceactlevel = VU_METER_MIN;
     ACE_Time_Value m_voiceact_delay = ACE_Time_Value(1, 500000);

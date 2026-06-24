@@ -610,21 +610,27 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     }
 
     MeasureVoiceLevel(audblock);
+bool has_internal_data = false;
 
-    bool has_internal_data = false;
-
-    // اعمال منطق همگام‌ساز صوتی و میکس سه شرطی
+    // اعمال منطق همگام‌ساز صوتی و میکس سه شرطی با رفع باگ بریده بریده شدن و مدیریت بافرینگ
     {
         std::lock_guard<std::recursive_mutex> lock(m_internal_audio_mtx);
         int required_total = audblock.input_samples * audblock.inputfmt.channels;
 
-        if (m_internal_audio_fifo.size() >= (size_t)required_total) {
+        if (m_internal_buffering) {
+            size_t wait_threshold = 4 * required_total; // بافر کردن ۴ فریم جهت جلوگیری از لرزش و پرش صوتی در زمان اتصال میکروفون
+            if (m_internal_audio_fifo.size() >= wait_threshold) {
+                m_internal_buffering = false;
+            }
+        }
+
+        if (!m_internal_buffering && m_internal_audio_fifo.size() >= (size_t)required_total) {
             has_internal_data = true;
 
             bool mic_is_open = (IsVoiceActive() && audblock.voiceact_enc) || audblock.force_enc;
 
             if (mic_is_open) {
-                // شرط ۱: پکت صوتی در بافر موجود است و میکروفون فعال است -> ادغام دو سیگنال با حفظ سقف صوتی
+                // شرط ۱: پکت صوتی در بافر موجود است و میکروفون فعال است -> ادغام دو سیگنال با حفظ سقف صوتی استاندارد
                 for (int i = 0; i < required_total; ++i) {
                     int32_t mixed = audblock.input_buffer[i] + m_internal_audio_fifo[i];
                     audblock.input_buffer[i] = (short)((mixed > 32767) ? 32767 : (mixed < -32768 ? -32768 : mixed));
@@ -635,8 +641,12 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
             }
 
             m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+        } else {
+            // شرط ۳: پکت صوتی در بافر داخلی موجود نیست یا در حال بافرینگ اولیه هستیم
+            if (m_internal_audio_fifo.empty()) {
+                m_internal_buffering = true;
+            }
         }
-        // شرط ۳: پکت صوتی در بافر داخلی موجود نیست -> صدا به صورت مستقیم و بدون دستکاری با نمونه میکروفون به جلو فرستاده می‌شود
     }
 
     if(audblock.inputfmt.channels == 2)

@@ -4406,10 +4406,10 @@ TEAMTALKDLL_API TTBOOL TT_SetSoundInputFilter(IN TTInstance* lpTTInstance,
 }
 
 extern "C" {
-    TEAMTALKDLL_API void TT_PushInternalAudio(IN TTInstance* lpTTInstance, const short* lpData, int nSamples) {
+    TEAMTALKDLL_API void TT_PushInternalAudio(IN TTInstance* lpTTInstance, const short* lpData, int nSamples, int nGain, TTBOOL bForceTransmitCheck) {
         auto inst = GetClient(lpTTInstance);
         if (inst && inst->clientnode) {
-            inst->clientnode->FeedToInsertAudioBlock(lpData, nSamples);
+            inst->clientnode->FeedToInsertAudioBlock(lpData, nSamples, nGain, bForceTransmitCheck != 0);
         }
     }
 }
