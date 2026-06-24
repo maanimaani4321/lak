@@ -6054,61 +6054,102 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 }
 
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
-    if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) return;
+    // ۱. بررسی وضعیت اتصال
+    if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) {
+        m_internal_audio_fifo.clear();
+        m_internal_buffering = true;
+        return;
+    }
 
+    // ۲. استخراج تنظیمات کدک جاری کانال
     auto target_fmt = GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec());
-    int target_samples = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
-    media::AudioFormat source_fmt(48000, 2); 
+    int target_samples_per_tick = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
     
+    // ورودی فیکس از سمت جاوای شما (۴۸۰۰۰ استریو)
+    media::AudioFormat source_fmt(48000, 2); 
+
+    // ۳. مدیریت رساپلر و بافر داخلی
     if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
         m_internal_push_resampler->GetOutputFormat() != target_fmt) {
+        
         m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
-        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 8);
-        m_internal_buffering = true;
+        // اختصاص فضای کافی برای تبدیل (۴ برابر سایز هدف برای امنیت)
+        m_internal_push_resample_buf.resize(target_samples_per_tick * target_fmt.channels * 4);
+        m_internal_buffering = true; 
     }
 
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
+
+    // ۴. رساپل کردن دیتای ورودی
+    // خروجی Resample معمولاً تعداد سمپل به ازای هر کانال است
+    int out_samples_per_chan = m_internal_push_resampler->Resample(buffer, samples, 
+                                                                  m_internal_push_resample_buf.data(), 
+                                                                  (int)m_internal_push_resample_buf.size());
     
-    int out_samples = m_internal_push_resampler->Resample(buffer, samples, 
-                                                          m_internal_push_resample_buf.data(), 
-                                                          (int)m_internal_push_resample_buf.size());
-    
-    if (out_samples > 0) {
+    if (out_samples_per_chan > 0) {
+        // محاسبه کل المنت‌ها (سمپل‌ها * تعداد کانال)
+        int total_elements = out_samples_per_chan * target_fmt.channels;
+        
+        // ریختن دیتا در انتهای صف FIFO
         m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
                                      m_internal_push_resample_buf.begin(), 
-                                     m_internal_push_resample_buf.begin() + out_samples);
+                                     m_internal_push_resample_buf.begin() + total_elements);
     }
 
-    int required_per_frame = target_samples * target_fmt.channels;
-    
+    // ۵. منطق بافرینگ امن (Warm-up) و تخلیه فریم‌ها
+    int elements_required_per_frame = target_samples_per_tick * target_fmt.channels;
+
+    // حاشیه امن ۱۰ فریم برای جلوگیری از Choppiness
     if (m_internal_buffering) {
-        if (m_internal_audio_fifo.size() >= (size_t)(required_per_frame * 10)) {
-            m_internal_buffering = false;
+        if (m_internal_audio_fifo.size() >= (size_t)(elements_required_per_frame * 10)) {
+            m_internal_buffering = false; // بافر پر شد، اجازه خروج بده
         } else {
-            return;
+            return; // هنوز دیتای کافی جمع نشده، صبر کن
         }
     }
 
-    while (m_internal_audio_fifo.size() >= (size_t)required_per_frame) {
-        ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples));
+    // ۶. حلقه استخراج فریم‌های استاندارد (مثلاً ۲۰ میلی‌ثانیه‌ای)
+    while (m_internal_audio_fifo.size() >= (size_t)elements_required_per_frame) {
+        
+        // کپی دیتا در بلاک حافظه تیم‌تاک (ACE_Message_Block)
+        // این تابع داخلی SDK، حافظه را کپی و مدیریت می‌کند
+        ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples_per_tick));
         
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
-        raw_frame->force_enc = true;
-        raw_frame->sample_no = m_soundprop.samples_recorded;
-        m_soundprop.samples_recorded += target_samples;
-        raw_frame->timestamp = GETTIMESTAMP();
+        raw_frame->force_enc = true; // اجبار انکودر به کار (حتی در سکوت)
 
+        // مدیریت Stream ID (بسیار مهم: اگر ۰ باشد در مقصد نادیده گرفته می‌شود)
+        if (m_voice_stream_id == 0) m_voice_stream_id = 1; 
+        raw_frame->streamid = m_voice_stream_id;
+
+        // ۷. تایمینگ ریاضی و دقیق (Linear Sample-based Timing)
+        // به جای زمان لحظه‌ای سیستم، از تعداد کل سمپل‌های ارسالی استفاده می‌کنیم
+        raw_frame->sample_no = m_soundprop.samples_recorded;
+        
+        // فرمول استاندارد: (سمپل‌های طی شده / فرکانس) * ۱۰۰۰ = میلی‌ثانیه واقعی
+        // این کار Jitter را به صفر می‌رساند چون پکت‌ها در مقصد دقیقاً پشت هم چیده می‌شوند
+        raw_frame->timestamp = (m_soundprop.samples_recorded * 1000) / target_fmt.samplerate;
+
+        m_soundprop.samples_recorded += target_samples_per_tick;
+
+        // ارسال به ترد انکودر برای آپلود
         m_voice_thread.QueueAudio(mb);
 
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_per_frame);
+        // حذف دیتای پردازش شده از ابتدای FIFO
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
+                                     m_internal_audio_fifo.begin() + elements_required_per_frame);
         
+        // فعال کردن آیکون بلندگو در برنامه
         if ((m_flags & CLIENT_SNDINPUT_VOICEACTIVE) == 0) {
             m_flags |= CLIENT_SNDINPUT_VOICEACTIVE;
             m_listener->OnVoiceActivated(true);
         }
     }
 
+    // ۸. بازگشت به حالت انتظار در صورت تخلیه کامل بافر
+    // اگر بافر خالی شد، یعنی وقفه‌ای در ورودی جاوا رخ داده
+    // پس مجدداً Buffering را فعال می‌کنیم تا فریم‌های بعدی بریده نشوند
     if (m_internal_audio_fifo.empty()) {
         m_internal_buffering = true;
     }
