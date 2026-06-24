@@ -47,22 +47,7 @@ if (JNI_FOUND OR ${CMAKE_SYSTEM_NAME} MATCHES "Android")
     if (BUILD_TEAMTALK_LIBRARY_JNIPRO OR BUILD_TEAMTALK_LIBRARY_JNI)
       set (CMAKE_CXX_STANDARD 17)
     endif()
-
-        if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
-      add_library(onnxruntime SHARED IMPORTED)
-      set_target_properties(onnxruntime PROPERTIES
-          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libonnxruntime.so)
-
-      add_library(sherpa-onnx-c-api SHARED IMPORTED)
-      set_target_properties(sherpa-onnx-c-api PROPERTIES
-          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-c-api.so)
-
-      add_library(sherpa-onnx-cxx-api SHARED IMPORTED)
-      set_target_properties(sherpa-onnx-cxx-api PROPERTIES
-          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-cxx-api.so)
-    endif()
     
-
     if (BUILD_TEAMTALK_LIBRARY_JNI)
 
       add_library (TeamTalk5-jni SHARED

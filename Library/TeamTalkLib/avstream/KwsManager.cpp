@@ -9,6 +9,7 @@ namespace teamtalk {
 
 struct KwsInternalState {
     std::recursive_mutex mutex;
+    std::unique_ptr<sherpa_onnx::cxx::VoiceActivityDetector> vad; // مدل ۲۰۰ کیلوبایتی VAD سبک
     std::unique_ptr<sherpa_onnx::cxx::KeywordSpotter> spotter;
     std::unique_ptr<sherpa_onnx::cxx::OnlineStream> stream;
     std::unique_ptr<sherpa_onnx::cxx::LinearResampler> resampler;
@@ -42,18 +43,39 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
               const std::string& joiner_path,
               const std::string& tokens_path,
               const std::string& bpe_path,
-              const std::string& keywords_path)
+              const std::string& keywords_path,
+              const std::string& vad_path)
 {
     std::lock_guard<std::recursive_mutex> lock(g_state.mutex);
     if (g_state.active) return true;
 
-    // بررسی دقیق وجود فایل‌ها جهت تضمین ۱۰۰ درصدی عدم کرش برنامه
     if (!FileExists(encoder_path) || !FileExists(decoder_path) || !FileExists(joiner_path) ||
-        !FileExists(tokens_path) || !FileExists(bpe_path) || !FileExists(keywords_path)) {
+        !FileExists(tokens_path) || !FileExists(bpe_path) || !FileExists(keywords_path) || !FileExists(vad_path)) {
         return false;
     }
 
     try {
+        // ۱. مقداردهی اولیه مدل سبک VAD برای تشخیص صدای انسان
+        sherpa_onnx::cxx::VadModelConfig vad_config;
+        vad_config.silero_vad.model = vad_path.c_str();
+        vad_config.silero_vad.threshold = 0.5f;
+        vad_config.silero_vad.min_silence_duration = 0.5f;
+        vad_config.silero_vad.min_speech_duration = 0.25f;
+        vad_config.silero_vad.window_size = 512;
+        vad_config.sample_rate = 16000;
+        vad_config.num_threads = 1; // برای VAD ۱ ترد کاملاً کافی است
+        vad_config.provider = "cpu";
+
+        g_state.vad = std::make_unique<sherpa_onnx::cxx::VoiceActivityDetector>(
+            sherpa_onnx::cxx::VoiceActivityDetector::Create(vad_config, 10.0f)
+        );
+
+        if (!g_state.vad || !g_state.vad->Get()) {
+            g_state.vad.reset();
+            return false;
+        }
+
+        // ۲. مقداردهی اولیه مدل اصلی KWS برای تشخیص کلمات
         sherpa_onnx::cxx::KeywordSpotterConfig config;
         config.feat_config.sample_rate = 16000;
         config.feat_config.feature_dim = 80;
@@ -76,6 +98,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         );
 
         if (!g_state.spotter || !g_state.spotter->Get()) {
+            g_state.vad.reset();
             g_state.spotter.reset();
             return false;
         }
@@ -87,6 +110,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         jclass clazz = env->GetObjectClass(jlistener);
         g_state.callback_method_id = env->GetMethodID(clazz, "onKeywordDetected", "(Ljava/lang/String;)V");
         if (!g_state.callback_method_id) {
+            g_state.vad.reset();
             g_state.spotter.reset();
             g_state.stream.reset();
             return false;
@@ -94,10 +118,11 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
 
         g_state.java_listener_ref = env->NewGlobalRef(jlistener);
         g_state.active = true;
-        g_state.current_samplerate = 0; // وادار کردن رساپلر به تنظیم مجدد در اولین فریم صوتی
+        g_state.current_samplerate = 0;
 
         return true;
     } catch (...) {
+        g_state.vad.reset();
         g_state.spotter.reset();
         g_state.stream.reset();
         return false;
@@ -109,6 +134,7 @@ void KwsStop(JNIEnv* env) {
     if (!g_state.active) return;
 
     g_state.active = false;
+    g_state.vad.reset();
     g_state.spotter.reset();
     g_state.stream.reset();
     g_state.resampler.reset();
@@ -146,9 +172,9 @@ static void NotifyJavaListener(const std::string& keyword) {
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
     std::lock_guard<std::recursive_mutex> lock(g_state.mutex);
-    if (!g_state.active || !g_state.stream || !g_state.spotter) return;
+    if (!g_state.active || !g_state.stream || !g_state.spotter || !g_state.vad) return;
 
-    // تبدیل داده‌های استریو یا مونو ورودی به فرمت شناور مونو و نرمال‌شده [-1.0f, 1.0f]
+    // ۱. تبدیل کانال‌های صوتی استریو به مونو فلوت [-1.0f, 1.0f]
     std::vector<float> mono_float(samples);
     for (int i = 0; i < samples; ++i) {
         float sum = 0.0f;
@@ -158,7 +184,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         mono_float[i] = sum / (channels * 32768.0f);
     }
 
-    // ایجاد یا به‌روزرسانی رساپلر پویا بر اساس فرکانس نمونه‌برداری میکروفون اوبو
+    // ۲. بررسی و ایجاد رساپلر به ۱۶۰۰۰ هرتز در صورت تغییر فرکانس
     if (!g_state.resampler || g_state.current_samplerate != samplerate) {
         g_state.resampler = std::make_unique<sherpa_onnx::cxx::LinearResampler>(
             sherpa_onnx::cxx::LinearResampler::Create(samplerate, 16000, 0, 6)
@@ -166,20 +192,31 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         g_state.current_samplerate = samplerate;
     }
 
-    // انجام رساپلینگ به 16000 هرتز
     std::vector<float> resampled = g_state.resampler->Resample(mono_float.data(), mono_float.size(), false);
 
     if (!resampled.empty()) {
-        g_state.stream->AcceptWaveform(16000, resampled.data(), resampled.size());
+        // ۳. ابتدا صدا را به مدل سبک VAD می‌دهیم تا چک کند آیا صدای انسان است یا خیر
+        g_state.vad->AcceptWaveform(resampled.data(), resampled.size());
 
-        while (g_state.spotter->IsReady(g_state.stream.get())) {
-            g_state.spotter->Decode(g_state.stream.get());
-        }
+        // ۴. تنها در صورتی که سگمنت فعال صحبت انسان تشخیص داده شود، بخش KWS به کار می‌افتد (کاهش چشمگیر مصرف باتری و CPU)
+        while (!g_state.vad->IsEmpty()) {
+            auto segment = g_state.vad->Front();
+            g_state.vad->Pop();
 
-        auto result = g_state.spotter->GetResult(g_state.stream.get());
-        if (!result.keyword.empty()) {
-            NotifyJavaListener(result.keyword);
-            g_state.spotter->Reset(g_state.stream.get());
+            if (segment.samples && segment.n > 0) {
+                // ارسال بخش بریده شده و تایید شده صدای انسان به موتور کلمات کلیدی KWS
+                g_state.stream->AcceptWaveform(16000, segment.samples, segment.n);
+
+                while (g_state.spotter->IsReady(g_state.stream.get())) {
+                    g_state.spotter->Decode(g_state.stream.get());
+                }
+
+                auto result = g_state.spotter->GetResult(g_state.stream.get());
+                if (!result.keyword.empty()) {
+                    NotifyJavaListener(result.keyword);
+                    g_state.spotter->Reset(g_state.stream.get());
+                }
+            }
         }
     }
 }
