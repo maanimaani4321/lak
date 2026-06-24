@@ -23,6 +23,7 @@
 
 #include "AudioMuxer.h"
 
+#include "teamtalk/SecurityCheck.h"
 #include "myace/MyACE.h"
 #include "mystd/MyStd.h"
 #include "teamtalk/CodecCommon.h"
@@ -183,6 +184,7 @@ bool AudioMuxer::SaveFile(const teamtalk::AudioCodec& codec,
                           const ACE_TString& filename,
                           teamtalk::AudioFileFormat aff)
 {
+    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) return false;
     if (FileActive() || !Init(GetAudioCodecAudioInputFormat(codec)))
         return false;
 
