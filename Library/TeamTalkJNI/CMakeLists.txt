@@ -26,6 +26,7 @@ find_package(JNI)
 if (JNI_FOUND OR ${CMAKE_SYSTEM_NAME} MATCHES "Android")
 
     include_directories (../../Library/TeamTalk_DLL ${JNI_INCLUDE_DIRS})
+    include_directories (${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/include)
 
     if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
       link_directories (../../Library/TeamTalk_DLL/${CMAKE_ANDROID_ARCH_ABI})
@@ -46,39 +47,43 @@ if (JNI_FOUND OR ${CMAKE_SYSTEM_NAME} MATCHES "Android")
       set (CMAKE_CXX_STANDARD 17)
     endif()
 
+        if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+      add_library(onnxruntime SHARED IMPORTED)
+      set_target_properties(onnxruntime PROPERTIES
+          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libonnxruntime.so)
+
+      add_library(sherpa-onnx-c-api SHARED IMPORTED)
+      set_target_properties(sherpa-onnx-c-api PROPERTIES
+          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-c-api.so)
+
+      add_library(sherpa-onnx-cxx-api SHARED IMPORTED)
+      set_target_properties(sherpa-onnx-cxx-api PROPERTIES
+          IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-cxx-api.so)
+    endif()
+    
+
     if (BUILD_TEAMTALK_LIBRARY_JNI)
 
       add_library (TeamTalk5-jni SHARED
         jni/teamtalk-jni.cpp
         jni/ttconvert-jni.cpp
         jni/ttconvert-jni.h)
-include_directories (${CMAKE_CURRENT_SOURCE_DIR}/sherpa-onnx/include)
-
-add_library(onnxruntime SHARED IMPORTED)
-set_target_properties(onnxruntime PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libonnxruntime.so)
-
-add_library(sherpa-onnx-c-api SHARED IMPORTED)
-set_target_properties(sherpa-onnx-c-api PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_CURRENT_SOURCE_DIR}/sherpa-onnx/lib/${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-c-api.so)
-
-add_library(sherpa-onnx-cxx-api SHARED IMPORTED)
-set_target_properties(sherpa-onnx-cxx-api PROPERTIES
-    IMPORTED_LOCATION ${CMAKE_ANDROID_ARCH_ABI}/libsherpa-onnx-cxx-api.so)
 
       if (BUILD_TEAMTALK_CORE)
         if (BUILD_TEAMTALK_LIBRARY_LIB)
-          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5Lib ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5Lib ${JNI_LIBRARIES})
         elseif (BUILD_TEAMTALK_LIBRARY_DLL)
-          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5DLL ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5DLL ${JNI_LIBRARIES})
         else()
-          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5 ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+          target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5 ${JNI_LIBRARIES})
         endif()
       else()
-        target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5 ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+        target_link_libraries (TeamTalk5-jni PRIVATE TeamTalk5 ${JNI_LIBRARIES})
       endif()
 
+      # لینک کردن هر ۳ فایل باینری دات سو به ماژول JNI استاندارد در اندروید
       if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+        target_link_libraries (TeamTalk5-jni PRIVATE onnxruntime sherpa-onnx-c-api sherpa-onnx-cxx-api)
         set_output_dir(TeamTalk5-jni "${CMAKE_CURRENT_SOURCE_DIR}/libs/${CMAKE_ANDROID_ARCH_ABI}")
       else()
         set_output_dir(TeamTalk5-jni "${CMAKE_CURRENT_SOURCE_DIR}/libs")
@@ -98,15 +103,17 @@ set_target_properties(sherpa-onnx-cxx-api PROPERTIES
         if (BUILD_TEAMTALK_LIBRARY_LIBPRO)
           target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5ProLib ${JNI_LIBRARIES})
         elseif (BUILD_TEAMTALK_LIBRARY_DLLPRO)
-          target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5ProDLL ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+          target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5ProDLL ${JNI_LIBRARIES})
         else()
-          target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5Pro ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+          target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5Pro ${JNI_LIBRARIES})
         endif()
       else()
-        target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5Pro ${JNI_LIBRARIES} onnxruntime sherpa-onnx-c-api)
+        target_link_libraries (TeamTalk5Pro-jni PRIVATE TeamTalk5Pro ${JNI_LIBRARIES})
       endif()
 
+      # لینک کردن هر ۳ فایل باینری دات سو به ماژول JNI حرفه‌ای در اندروید
       if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+        target_link_libraries (TeamTalk5Pro-jni PRIVATE onnxruntime sherpa-onnx-c-api sherpa-onnx-cxx-api)
         set_output_dir(TeamTalk5Pro-jni "${CMAKE_CURRENT_SOURCE_DIR}/libs/${CMAKE_ANDROID_ARCH_ABI}")
       else()
         set_output_dir(TeamTalk5Pro-jni "${CMAKE_CURRENT_SOURCE_DIR}/libs")
