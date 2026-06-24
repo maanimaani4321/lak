@@ -181,10 +181,10 @@ namespace teamtalk {
         // لوله ورودی برای صدای سیستم - عمومی برای دسترسی JNI
         bool m_internal_buffering = true;
         std::vector<short> m_internal_audio_fifo;
+        std::vector<short> m_callback_fifo;
         std::mutex m_internal_audio_mtx;
         std::vector<short> m_internal_push_resample_buf;
 audio_resampler_t m_internal_push_resampler;
-uint32_t m_internal_samples_recorded = 0;
         void FeedToInsertAudioBlock(const short* buffer, int samples);
         ClientNode(const ACE_TString& version, ClientListener* listener);
         ~ClientNode() override;
