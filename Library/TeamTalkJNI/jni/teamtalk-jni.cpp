@@ -590,6 +590,34 @@ extern "C" {
         teamtalk::KwsStop(env);
     }
     
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceAssistant(
+        JNIEnv* env, jobject thiz, jstring outputFile, jint durationSeconds, jboolean sendToTeamTalk)
+    {
+        THROW_NULLEX(env, outputFile, false);
+        const char* chars = env->GetStringUTFChars(outputFile, nullptr);
+        std::string out_file(chars);
+        env->ReleaseStringUTFChars(outputFile, chars);
+
+        return teamtalk::VoiceFeaturesManager::Instance().StartVoiceAssistant(out_file, durationSeconds, sendToTeamTalk) ? JTRUE : JFALSE;
+    }
+
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceMessage(
+        JNIEnv* env, jobject thiz, jstring outputFile, jboolean sendToTeamTalk)
+    {
+        THROW_NULLEX(env, outputFile, false);
+        const char* chars = env->GetStringUTFChars(outputFile, nullptr);
+        std::string out_file(chars);
+        env->ReleaseStringUTFChars(outputFile, chars);
+
+        return teamtalk::VoiceFeaturesManager::Instance().StartVoiceMessage(out_file, sendToTeamTalk) ? JTRUE : JFALSE;
+    }
+
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_stopVoiceMessage(
+        JNIEnv* env, jobject thiz)
+    {
+        return teamtalk::VoiceFeaturesManager::Instance().StopVoiceMessage() ? JTRUE : JFALSE;
+    }
+    
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalAudio(JNIEnv* env,
                                                                            jobject thiz,
                                                                            jshortArray data,
