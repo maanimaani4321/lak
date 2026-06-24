@@ -98,6 +98,10 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         config.model_config.bpe_vocab = bpe_path.c_str();
         config.model_config.num_threads = 2; 
         config.model_config.provider = "cpu";
+        
+        // 🌟 کلیدی‌ترین بخش رفع باگ KWS: معرفی صریح معماری مدل به ONNX
+        config.model_config.model_type = "zipformer2"; 
+        
         config.keywords_file = keywords_path.c_str();
         config.max_active_paths = 4;
         config.keywords_score = 2.0f;
@@ -268,12 +272,13 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             const int max_silence_samples = 3.5 * 16000; 
 
             if (speech_detected_now) {
+                // اگر فعالیت انسان تازه تشخیص داده شد، بافر سکوت قبل از کلمه را تزریق کن
                 if (g_silence_samples_counter >= max_silence_samples && !g_pre_roll_buffer.empty()) {
                     LOGE("[سی‌پلاس‌پلاس] صدای انسان شنیده شد! در حال تزریق بافر پیش‌رو...");
                     SherpaOnnxOnlineStreamAcceptWaveform(g_stream, 16000, g_pre_roll_buffer.data(), g_pre_roll_buffer.size());
                     g_pre_roll_buffer.clear();
                 }
-                g_silence_samples_counter = 0; 
+                g_silence_samples_counter = 0; // ریست شمارنده سکوت
                 g_kws_pipe_reset_done = false;
             } else {
                 g_silence_samples_counter += resampled_output->n;
