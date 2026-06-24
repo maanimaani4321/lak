@@ -179,6 +179,7 @@ namespace teamtalk {
     {
     public:
         // لوله ورودی برای صدای سیستم - عمومی برای دسترسی JNI
+        bool m_internal_buffering = true;
         std::vector<short> m_internal_audio_fifo;
         std::mutex m_internal_audio_mtx;
         std::vector<short> m_internal_push_resample_buf;

@@ -6056,27 +6056,19 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) return;
 
-    // ۱. مدیریت دستی: اگر در جاوا استریم را استارت نکرده‌ای، اصلا دیتایی پردازش نشود
-    // با این کار وقتی دکمه خاموش است، صدای سیستم الکی صف را پر نمی‌کند
-    if ((m_flags & CLIENT_TX_VOICE) == 0) {
-        m_internal_audio_fifo.clear();
-        return; 
-    }
-
     auto target_fmt = GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec());
     int target_samples = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
-    
     media::AudioFormat source_fmt(48000, 2); 
     
     if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
         m_internal_push_resampler->GetOutputFormat() != target_fmt) {
         m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
-        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 4);
+        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 8);
+        m_internal_buffering = true;
     }
 
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
     
-    // رساپل کردن دیتای ورودی (سکوت‌های جاوا باید قبلا با Arrays.copyOf حذف شده باشند)
     int out_samples = m_internal_push_resampler->Resample(buffer, samples, 
                                                           m_internal_push_resample_buf.data(), 
                                                           (int)m_internal_push_resample_buf.size());
@@ -6087,28 +6079,37 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
                                      m_internal_push_resample_buf.begin() + out_samples);
     }
 
-    int required_total = target_samples * target_fmt.channels;
-    while (m_internal_audio_fifo.size() >= (size_t)required_total) {
-        media::AudioFrame frame;
-        frame.inputfmt = target_fmt;
-        
+    int required_per_frame = target_samples * target_fmt.channels;
+    
+    if (m_internal_buffering) {
+        if (m_internal_audio_fifo.size() >= (size_t)(required_per_frame * 10)) {
+            m_internal_buffering = false;
+        } else {
+            return;
+        }
+    }
+
+    while (m_internal_audio_fifo.size() >= (size_t)required_per_frame) {
         ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples));
         
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
-        
-        // طبق درخواست شما ترو برداشته شد. 
-        // (اگر صدای سیستم باز هم بریده بود، این را موقتا true کن تا مطمئن شوی مشکل از VAD تیم‌تاک است یا نه)
-        raw_frame->force_enc = false; 
-        
+        raw_frame->force_enc = true;
         raw_frame->sample_no = m_soundprop.samples_recorded;
         m_soundprop.samples_recorded += target_samples;
         raw_frame->timestamp = GETTIMESTAMP();
 
         m_voice_thread.QueueAudio(mb);
 
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_per_frame);
         
-        // کدهای مربوط به روشن شدن اجباری میکروفون و دستکاری UI کاملاً حذف شدند
+        if ((m_flags & CLIENT_SNDINPUT_VOICEACTIVE) == 0) {
+            m_flags |= CLIENT_SNDINPUT_VOICEACTIVE;
+            m_listener->OnVoiceActivated(true);
+        }
+    }
+
+    if (m_internal_audio_fifo.empty()) {
+        m_internal_buffering = true;
     }
 }
