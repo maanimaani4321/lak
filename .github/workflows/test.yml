@@ -53,56 +53,38 @@ jobs:
         with:
           ndk-version: r26b
 
-      # مرحله جایگزین شده به جای کش قدیمی؛ بازیابی از Releases گیت‌هاب به مسیر کاملاً بومی و طبیعی
-      - name: Retrieve Pre-built Toolchain from Releases
-        id: get-prebuilt
-        run: |
-          # ساخت مسیر درختی بومی پروژه پیش از استخراج فایل زیپ جهت جلوگیری از خطای آدرس‌دهی
-          mkdir -p Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build
-          
-          echo "Checking for pre-compiled dependencies in GitHub Releases..."
-          if gh release download prebuilts -p "dependencies-arm64-v8a.zip" -D . --clobber 2>/dev/null; then
-            echo "Pre-compiled dependencies ZIP found. Unzipping directly to natural build directory..."
-            unzip -q dependencies-arm64-v8a.zip -d Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/
-            echo "cache-hit=true" >> $GITHUB_OUTPUT
-          else
-            echo "Pre-compiled dependencies ZIP not found."
-            echo "cache-hit=false" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # استفاده مجدد از کش بومی اکشنز (که هیچ موقع خطای دسترسی یا ۴۰۳ نمی‌دهد)
+      - name: Cache TeamTalk Toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/install
+          key: ${{ runner.os }}-toolchain-v8-${{ hashFiles('Library/TeamTalkLib/build/**/CMakeLists.txt', 'Library/TeamTalkLib/build/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-toolchain-v8-
 
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          if [ "${{ steps.get-prebuilt.outputs.cache-hit }}" = "true" ]; then
+          if [ "${{ steps.cache-toolchain.outputs.cache-hit }}" = "true" ]; then
             echo "Cache hit! Reusing pre-built toolchain libraries to save time."
             make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=OFF" android-arm64-v8a
           else
             echo "Cache miss! Compiling the entire toolchain from scratch."
             make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=ON" android-arm64-v8a
-            
-            # پس از پایان بیلد طبیعی، پوشه ایزوله install را فشرده کرده و به ریشه پروژه منتقل می‌کنیم
-            echo "Compiling completed. Packaging the natural dependencies install folder..."
-            cd build-release-android-arm64-v8a/Library/TeamTalkLib/build/
-            zip -r ../../../../../dependencies-arm64-v8a.zip install
           fi
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
-      # ذخیره‌سازی خودکار در بخش Release مخزن شما جهت استفاده‌های برنامه‌نویسی جریان کارهای بعدی
-      - name: Upload Prebuilt Dependencies to GitHub Releases
-        if: steps.get-prebuilt.outputs.cache-hit != 'true'
+      # زیپ کردن محتویات پوشه طبیعی install بعد از بیلد موفق
+      - name: Package Toolchain Dependencies to ZIP
         run: |
-          echo "Uploading prebuilt package to GitHub Releases..."
-          gh release upload prebuilts dependencies-arm64-v8a.zip --clobber || \
-          gh release create prebuilts dependencies-arm64-v8a.zip --title "Prebuilt Toolchain Dependencies" --notes "Automated prebuilt packages for TeamTalk dependencies"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          echo "Packaging dependencies install folder into ZIP..."
+          cd Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/
+          zip -r ../../../../../dependencies-arm64-v8a.zip install
 
-      # ذخیره‌سازی در آرتفکشن اجرای جاری جهت دسترسی راحت و دانلود دستی مستقیم شما از تب Actions گیت‌هاب
+      # آپلود فایل زیپ وابستگی‌ها به بخش Artifacts گیت‌هاب جهت دانلود راحت توسط خودتان
       - name: Upload Prebuilt Dependencies to Actions Artifacts
-        if: steps.get-prebuilt.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: prebuilt-dependencies-android-arm64-v8a
