@@ -3296,7 +3296,7 @@ bool ClientNode::StartStreamingMediaFile(const ACE_TString& filename,
 
     // initial playback should ignore offset being 0 (which is the logical value to use)
     if (!UpdateStreamingMediaFile((offset != 0 ? offset : MEDIASTREAMER_OFFSET_IGNORE),
-                                  paused, preprocessor, vid_codec))
+                                  paused, preprocessor, vid_codec, speed))
     {
         StopStreamingMediaFile();
         return false;
