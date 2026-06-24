@@ -197,7 +197,15 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     bool useVoiceCom = (inputdeviceid & 0x10000) != 0;
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
     bool hasSessionId = (inputdeviceid & 0x80000) != 0;
-    int realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
+    int realDeviceId;
+t
+if (hasSessionId) {
+    // اگر سشن آیدی است، فقط فلگ را حذف کن و کل عدد را بردار (بدون ماسک 0x7FF)
+    realDeviceId = inputdeviceid & 0x7FFFF; 
+} else {
+    // اگر میکروفون عادی است، از همان ماسک استاندارد استفاده کن
+    realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
+}
 
     // رفع باگ مونو/استریو:
     // فرمت‌های مونو/استریو به صورت داخلی توسط Oboe کنترل می‌شوند.
@@ -221,7 +229,7 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setChannelCount(channels);
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
-    builder.setErrorCallback(streamer.get());
+    
 
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
@@ -260,7 +268,9 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
             builder.setPerformanceMode(oboe::PerformanceMode::None);
             MYTRACE(ACE_TEXT("Oboe Input (Dynamic Generic): Device ID %d\n"), realDeviceId);
         }
+        if (!hasSessionId) {
         builder.setDeviceId(realDeviceId);
+        }
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
@@ -305,6 +315,10 @@ bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
 
+    bool hasSessionId = (streamer->inputdeviceid & 0x80000) != 0;
+    if (hasSessionId) {
+        return true; // تنظیمات فیلتر را برای سشن آیدی نادیده بگیر
+    }
     SoundDeviceFeatures features = streamer->recorder->GetCaptureFeatures();
     
     streamer->stream->requestStop();
