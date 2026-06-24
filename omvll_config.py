@@ -7,17 +7,12 @@ class MyConfig(omvll.ObfuscationConfig):
 
     def is_logic_code(self, mod: omvll.Module):
         path = mod.name.lower()
-        # فقط پوشه Library و JNI را هدف قرار می‌دهیم
+        # ۱. پوشه های هدف
         if "library/teamtalklib" in path or "library/teamtalkjni" in path:
-            # سوپاپ اطمینان: اگر فایلی باعث کرش می‌شود، نامش را اینجا استثنا کنید
+            # ۲. لیست سیاه (کلاً بیخیال اینها شو)
             black_list = [
-                "packetlayout", 
-                "packethelper", 
-                "audiocontainer", 
-                "streamhandler", 
-                "audiomuxer",
-                "myStd",
-                "oggfileio",
+                "packetlayout", "packethelper", "audiocontainer", 
+                "streamhandler", "audiomuxer", "mystd", "oggfileio",
                 "build/"
             ]
             if any(f in path for f in black_list):
@@ -25,36 +20,33 @@ class MyConfig(omvll.ObfuscationConfig):
             return True
         return False
 
+    def is_too_heavy(self, mod: omvll.Module):
+        path = mod.name.lower()
+        # این فایل‌ها بسیار بزرگ هستند و باعث کرش Clang می‌شوند
+        heavy_files = ["clientnode.cpp", "clientuser.cpp", "teamtalk.cpp"]
+        return any(f in path for f in heavy_files)
+
     def obfuscate_arithmetic(self, mod, func):
         return True if self.is_logic_code(mod) else False
 
     def flatten_cfg(self, mod, func):
+        # برای فایل‌های سنگین Flattening را غیرفعال می‌کنیم تا کرش نکند
+        if self.is_too_heavy(mod):
+            return False
         return True if self.is_logic_code(mod) else False
 
     def obfuscate_string(self, mod, func, string: bytes):
-        # رمزنگاری رشته‌ها سبک است، برای همه فعال می‌ماند
+        # رمزنگاری رشته‌ها همیشه و همه جا (بسیار امن و سبک)
         return omvll.StringEncOptGlobal()
 
     def basic_block_duplicate(self, mod, func):
-        if self.is_logic_code(mod):
-            # شدت ۳۰٪ برای پایداری بیشتر
+        if self.is_logic_code(mod) and not self.is_too_heavy(mod):
             return omvll.BasicBlockDuplicateWithProbability(30)
         return omvll.BasicBlockDuplicateWithProbability(0)
 
-    def indirect_call(self, mod, func):
-        if self.is_logic_code(mod):
-            return omvll.ObfuscationConfig.default_config(self, mod, func, [], [], [], 20)
-        return None
-
-    def break_control_flow(self, mod, func):
-        if self.is_logic_code(mod):
-            return omvll.ObfuscationConfig.default_config(self, mod, func, [], [], [], 20)
-        return None
-
     def function_outline(self, mod, func):
-        # عامل اصلی خطای Duplicate Symbol حتماً باید 0 باشد
         return omvll.FunctionOutlineWithProbability(0)
 
 @lru_cache(maxsize=1)
-def omvll_get_config(*args, **kwargs):
+def omvll_get_config(module=None):
     return MyConfig()
