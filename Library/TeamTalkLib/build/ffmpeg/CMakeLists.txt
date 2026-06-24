@@ -94,7 +94,7 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavfilter.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavformat.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavcodec.a
-      ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libswresample.a
+      ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/swresample.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libswscale.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavutil.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/include/ffmpeg/libavformat/version.h
