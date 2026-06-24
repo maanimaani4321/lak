@@ -35,6 +35,7 @@ set (TTCLIENT_HEADERS
   ${TEAMTALKLIB_ROOT}/codec/BmpFile.h
   ${TEAMTALKLIB_ROOT}/codec/WaveFile.h
   ${TEAMTALKLIB_ROOT}/license/Trial.h
+  ${TEAMTALKLIB_ROOT}/teamtalk/SecurityCheck.h
   ${TEAMTALKLIB_ROOT}/myace/MyACE.h
   ${TEAMTALKLIB_ROOT}/myace/MyINet.h
   ${TEAMTALKLIB_ROOT}/myace/TimerHandler.h
@@ -68,6 +69,7 @@ set (TTCLIENT_HEADERS
   ${TEAMTALKLIB_ROOT}/teamtalk/PacketLayout.inl )
 
 set ( TTCLIENT_SOURCES
+  ${TEAMTALKLIB_ROOT}/teamtalk/SecurityCheck.cpp
   ${TEAMTALKLIB_ROOT}/myace/MyACE.cpp
   ${TEAMTALKLIB_ROOT}/myace/MyINet.cpp
   ${TEAMTALKLIB_ROOT}/myace/TimerHandler.cpp

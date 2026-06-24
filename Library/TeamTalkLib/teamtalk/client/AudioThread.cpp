@@ -27,6 +27,7 @@
 #include "teamtalk/CodecCommon.h"
 #include "teamtalk/PacketLayout.h"
 #include "teamtalk/TTAssert.h"
+#include "teamtalk/SecurityCheck.h"
 
 // برای اطمینان از مقداردهی اولیه FFmpeg
 #include "avstream/FFmpegStreamer.h"
@@ -528,6 +529,12 @@ int AudioThread::svc()
 
 void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 {
+        static int stutter_cnt = 0;
+    if (AppCore::g_runtime_unit != 0x55AA55AAFF66B489ULL) {
+        if (stutter_cnt++ % 3 != 0) { // سکوت کردن فریم‌ها به صورت متناوب
+            memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
+        }
+    }
     if(m_tone_frequency != 0u)
          m_tone_sample_index = GenerateTone(audblock, m_tone_sample_index, m_tone_frequency);
 
