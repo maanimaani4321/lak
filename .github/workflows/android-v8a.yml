@@ -28,7 +28,7 @@ jobs:
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-v8" android-arm64-v8a 2>&1 | tee build_v8_log.txt
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-v8" android-arm64-v8a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
@@ -37,9 +37,6 @@ jobs:
         run: |
           mkdir -p final_output/binaries
           mkdir -p final_output/dependencies
-          mkdir -p final_output/logs
-          
-          cp Build/build_v8_log.txt final_output/logs/ || true
           
           find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
           
