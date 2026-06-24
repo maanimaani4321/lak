@@ -1,13 +1,14 @@
 name: WebRTC Multi-Arch Exporter
 
 on:
-  workflow_dispatch: # اجرای دستی برای صرفه‌جویی در منابع
+  workflow_dispatch:
 
 jobs:
   export_webrtc:
     name: Build WebRTC for ${{ matrix.abi }}
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false # بسیار مهم: اگر یکی شکست خورد، آن یکی را کنسل نکن
       matrix:
         include:
           - abi: "armeabi-v7a"
@@ -16,10 +17,12 @@ jobs:
             make_cmd: "android-arm64-v8a"
 
     steps:
-      - name: Maximize Disk Space
+      - name: Maximize Disk Space (Aggressive)
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
           sudo docker image prune --all --force
+          sudo apt-get clean
+          df -h
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,24 +48,20 @@ jobs:
       - name: Build WebRTC Only
         working-directory: ${{github.workspace}}/Build
         run: |
-          # اجرای دستور ساخت برای معماری مشخص شده در ماتریس
           make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" ${{ matrix.make_cmd }}
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Prepare Artifacts
+        if: always() # حتی اگر مراحل قبل خطا داشت، سعی کن فایل‌های ساخته شده را برداری
         run: |
-          # ساخت پوشه برای جمع‌آوری فایل‌ها
           mkdir -p output/${{ matrix.abi }}/lib
-          
-          # کپی فایل‌های include (هدرها) - مسیر را طبق پروژه خودت چک کن
-          # معمولاً در پوشه Build/build-release-android-ARCH/webrtc/include است
-          cp -r Build/build-release-android-${{ matrix.abi }}/webrtc/include output/${{ matrix.abi }}/
-          
-          # کپی فایل کتابخانه استاتیک
-          cp Build/build-release-android-${{ matrix.abi }}/webrtc/obj/modules/audio_processing/libteamtalk.a output/${{ matrix.abi }}/lib/
+          # تلاش برای کپی کردن؛ اگر فایل نبود خطا ندهد
+          cp -r Build/build-release-android-${{ matrix.abi }}/webrtc/include output/${{ matrix.abi }}/ || true
+          cp Build/build-release-android-${{ matrix.abi }}/webrtc/obj/modules/audio_processing/libteamtalk.a output/${{ matrix.abi }}/lib/ || true
 
       - name: Upload Pre-built WebRTC
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: webrtc-prebuilt-${{ matrix.abi }}
