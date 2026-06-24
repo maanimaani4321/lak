@@ -264,7 +264,8 @@ namespace teamtalk {
         bool StartStreamingMediaFile(const ACE_TString& filename,
                                      uint32_t offset, bool paused,
                                      const AudioPreprocessor& preprocessor,
-                                     const VideoCodec& vid_codec);
+                                     const VideoCodec& vid_codec,
+                                     float speed);
         bool UpdateStreamingMediaFile(uint32_t offset, bool paused,
                                       const AudioPreprocessor& preprocessor,
                                       const VideoCodec& vid_codec);

@@ -328,7 +328,8 @@ void FFmpegStreamer::Run()
                                                     aud_buffersrc_ctx,
                                                     audio_stream_index,
                                                     m_media_out.audio.channels,
-                                                    m_media_out.audio.samplerate);
+                                                    m_media_out.audio.samplerate,
+                                                    m_media_out.speed);
 
         if(audio_filter_graph == nullptr)
         {
@@ -754,7 +755,8 @@ AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
                                       AVFilterContext*& aud_buffersrc_ctx,
                                       int audio_stream_index,
                                       int out_channels,
-                                      int out_samplerate)
+                                      int out_samplerate,
+                                      float speed)
 {
     //init filters
     AVFilterGraph *filter_graph = nullptr;
@@ -885,10 +887,21 @@ AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
     inputs->filter_ctx = aud_buffersink_ctx;
     inputs->pad_idx    = 0;
     inputs->next       = nullptr;
+    char atempo_str[256] = "";
+
+    if (speed != 1.0f && speed >= 0.5f) {
+        if (speed <= 2.0f) {
+            snprintf(atempo_str, sizeof(atempo_str), "atempo=%.2f,", speed);
+        } else if (speed <= 4.0f) {
+            snprintf(atempo_str, sizeof(atempo_str), "atempo=2.0,atempo=%.2f,", speed / 2.0f);
+        } else {
+            snprintf(atempo_str, sizeof(atempo_str), "atempo=2.0,atempo=2.0,");
+        }
+    }
 
     snprintf(filter_descr, sizeof(filter_descr),
-             "aresample=%d,aformat=sample_fmts=s16:channel_layouts=%s",
-             out_samplerate, (out_channels == 2?"stereo":"mono"));
+             "%saresample=%d,aformat=sample_fmts=s16:channel_layouts=%s",
+             atempo_str, out_samplerate, (out_channels == 2?"stereo":"mono"));
 
     if ((ret = avfilter_graph_parse(filter_graph, filter_descr,
                                     inputs, outputs, nullptr)) < 0)
