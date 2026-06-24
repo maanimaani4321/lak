@@ -149,7 +149,7 @@ namespace AppCore {
         return diff; 
     }
 
-    __attribute__((always_inline)) inline void sync_context() {
+    void sync_context() {
         uint64_t status = _collect_telemetry();
         if (status == 0) {
             g_runtime_unit = SEC_K ^ 0xABCDE123; 
