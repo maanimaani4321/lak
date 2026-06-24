@@ -1,4 +1,6 @@
-/* OboeWrapper.cpp */
+/*
+ * OboeWrapper.cpp
+ */
 #include "OboeWrapper.h"
 #include "myace/MyACE.h"
 #include <cassert>
@@ -14,9 +16,7 @@ enum AndroidSoundDevice {
 
 constexpr auto DEFAULT_SAMPLERATE = 48000;
 
-OboeWrapper::OboeWrapper() {
-    Init();
-}
+OboeWrapper::OboeWrapper() { Init(); }
 
 OboeWrapper::~OboeWrapper() {
     Close();
@@ -29,9 +29,7 @@ bool OboeWrapper::Init() {
     return true;
 }
 
-void OboeWrapper::Close() {
-    MYTRACE(ACE_TEXT("Closed Oboe\n"));
-}
+void OboeWrapper::Close() { MYTRACE(ACE_TEXT("Closed Oboe\n")); }
 
 std::shared_ptr<OboeWrapper> OboeWrapper::getInstance() {
     static std::shared_ptr<OboeWrapper> p(new OboeWrapper());
@@ -42,8 +40,7 @@ soundgroup_t OboeWrapper::NewSoundGroup() {
     return std::make_shared<OboeSoundGroup>();
 }
 
-void OboeWrapper::RemoveSoundGroup(soundgroup_t grp) {
-}
+void OboeWrapper::RemoveSoundGroup(soundgroup_t grp) { }
 
 bool OboeWrapper::GetDefaultDevices(int& inputdeviceid, int& outputdeviceid) {
     return GetDefaultDevices(SOUND_API_OBOE_ANDROID, inputdeviceid, outputdeviceid);
@@ -76,10 +73,10 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
     dev.output_channels.insert(2);
     dev.default_samplerate = DEFAULT_SAMPLERATE;
 
-    // دیوایس 0
+    // دیوایس 0 به عنوان صدای خام
     sounddevs[dev.id] = dev;
 
-    // دیوایس 1 (دارای حذف اکو و نویز سخت‌افزاری)
+    // دیوایس 1 دارای نویزگیر و اکوکنسلر سخت افزاری
     DeviceInfo voicecom_dev = dev;
     voicecom_dev.id = VOICECOM_DEVICE_ID;
     voicecom_dev.devicename = ACE_TEXT("Voice Communication Sound Device (Oboe)");
@@ -95,12 +92,10 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     short* pcmData = static_cast<short*>(audioData);
     int totalNewSamples = numFrames * channels;
 
-    // ذخیره فریم‌های جدیدِ Oboe در بافر واسط
     buffer.insert(buffer.end(), pcmData, pcmData + totalNewSamples);
 
     int requiredSamples = framesize * channels;
 
-    // ارسال به TeamTalk فقط زمانی که دقیقاً به اندازه سایز استانداردِ تیم‌تاک دیتا جمع شده باشد
     while (buffer.size() >= (size_t)requiredSamples) {
         recorder->StreamCaptureCb(*this, buffer.data(), framesize);
         buffer.erase(buffer.begin(), buffer.begin() + requiredSamples);
@@ -120,11 +115,17 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
 
-    if (inputdeviceid == VOICECOM_DEVICE_ID || (capture->GetCaptureFeatures() & SOUNDDEVICEFEATURE_AEC)) {
+    // بررسی اینکه آیا جاوا درخواست فیلتر سخت‌افزاری کرده است؟
+    bool useHardwareFilters = (capture->GetCaptureFeatures() & SOUNDDEVICEFEATURE_AEC) ||
+                              (capture->GetCaptureFeatures() & SOUNDDEVICEFEATURE_DENOISE);
+
+    if (inputdeviceid == VOICECOM_DEVICE_ID || useHardwareFilters) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
-        MYTRACE(ACE_TEXT("Oboe: Activated VoiceCommunication preset for Hardware AEC/NS\n"));
+        MYTRACE(ACE_TEXT("Oboe: Activated VoiceCommunication preset (Hardware AEC/NS)\n"));
     } else {
-        builder.setInputPreset(oboe::InputPreset::Generic);
+        // Unprocessed به اندروید دستور می‌دهد صدای کاملاً خام و بدون دستکاری به ما بدهد
+        builder.setInputPreset(oboe::InputPreset::Unprocessed);
+        MYTRACE(ACE_TEXT("Oboe: Activated Unprocessed preset (Raw Audio)\n"));
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
@@ -159,7 +160,10 @@ bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
 }
 
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
-    return true; 
+    // برگرداندن false باعث می‌شود TeamTalk متوجه شود که نمی‌تواند فیلتر سخت‌افزاری را
+    // در لحظه (بدون ری‌استارت میکروفون) عوض کند. بنابراین میکروفون را بسته و با
+    // پریستِ جدید (Unprocessed یا VoiceCommunication) دوباره باز می‌کند.
+    return false; 
 }
 
 
@@ -172,7 +176,6 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     
     bool more = true;
 
-    // پر کردن بافر واسط تا زمانی که به اندازه درخواست Oboe دیتا داشته باشیم
     while (buffer.size() < (size_t)requiredSamplesForOboe && more) {
         std::vector<short> tmpChunk(teamTalkChunkSamples, 0);
         
@@ -185,12 +188,10 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
         buffer.insert(buffer.end(), tmpChunk.begin(), tmpChunk.end());
     }
 
-    // کپی کردن دیتا برای پخش در اسپیکر
     int copySamples = std::min((int)buffer.size(), requiredSamplesForOboe);
     std::memcpy(outData, buffer.data(), copySamples * sizeof(short));
     buffer.erase(buffer.begin(), buffer.begin() + copySamples);
 
-    // اگر دیتای کافی وجود نداشت (مثلاً پایان استریم)، مابقی را با سکوت (صفر) پر می‌کنیم تا صدای ناهنجار تولید نشود
     if (copySamples < requiredSamplesForOboe) {
         std::memset(outData + copySamples, 0, (requiredSamplesForOboe - copySamples) * sizeof(short));
     }
