@@ -1,4 +1,4 @@
-name: Android v8 Optimized
+name: Android v7 Optimized
 
 on:
   push:
@@ -25,10 +25,10 @@ jobs:
         with:
           ndk-version: r26b
 
-      - name: build_sdk_v8
+      - name: build_sdk_v7
         working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-v8" android-arm64-v8a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-v7" android-armeabi-v7a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
@@ -46,5 +46,5 @@ jobs:
       - name: upload_results
         uses: actions/upload-artifact@v4
         with:
-          name: TeamTalk-v8-Offline-Package
+          name: TeamTalk-v7-Offline-Package
           path: final_output/
