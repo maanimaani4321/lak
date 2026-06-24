@@ -6106,7 +6106,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     }
 
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
-    
+        
     int in_frames = samples / source_fmt.channels;
     
     // ۳. رساپل کردن داده‌های ورودی با اعمال تعداد فریم‌های اصلاح شده
@@ -6121,7 +6121,21 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
                                      m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
     }
 
+    int max_buffer_samples = target_fmt.samplerate * target_fmt.channels * 2;
+    int trim_samples = target_fmt.samplerate * target_fmt.channels * 0.5;
 
+    // گارد برای بافر اصلی
+    if (m_internal_audio_fifo.size() > (size_t)max_buffer_samples) {
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
+                                     m_internal_audio_fifo.begin() + trim_samples);
+        MYTRACE(ACE_TEXT("AudioMuxer: Buffer overflow! Trimmed 500ms of old data.\n"));
+    }
+
+    // گارد برای بافر میکس
+    if (m_callback_fifo.size() > (size_t)max_buffer_samples) {
+        m_callback_fifo.erase(m_callback_fifo.begin(), 
+                               m_callback_fifo.begin() + trim_samples);
+    }
 
     // ۴. استخراج فریم‌های استاندارد مورد نیاز کدک و ارسال به ترد صوتی تیم‌تاک
     int required_total = target_samples * target_fmt.channels;
@@ -6137,7 +6151,14 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     }
 
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
-        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
+        if ( (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) || 
+             m_soundsystem->IsStreamStopped(static_cast<StreamCapture*>(this)) ) {
+            if (!m_callback_fifo.empty()) {
+                m_internal_audio_fifo.insert(m_internal_audio_fifo.begin(), m_callback_fifo.begin(), m_callback_fifo.end());
+                m_callback_fifo.clear();
+                if (m_internal_audio_fifo.size() < (size_t)required_total) break;
+            }
+
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
         
@@ -6154,7 +6175,6 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
         m_voice_thread.QueueAudio(mb);
         } else {
-            // ب: میکروفون واقعی داریم -> فریم آماده را به رینگ بافر دوم (m_callback_fifo) منتقل کن
             m_callback_fifo.insert(m_callback_fifo.end(), 
                                    m_internal_audio_fifo.begin(), 
                                    m_internal_audio_fifo.begin() + required_total);
