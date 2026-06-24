@@ -410,6 +410,10 @@ bool MediaStreamer::ProcessAudioFrame(ACE_UINT32 starttime, ACE_UINT32 curtime, 
     media_frame->input_buffer =
         reinterpret_cast<short*>(out_mb->wr_ptr() + sizeof(AudioFrame));
     media_frame->input_samples = m_media_out.audio_samples;
+    
+    media_frame->sample_no = m_out_sample_no;             
+    m_out_sample_no += m_media_out.audio_samples;         
+    
     //advance wr_ptr() past header
     out_mb->wr_ptr(sizeof(*media_frame));
 

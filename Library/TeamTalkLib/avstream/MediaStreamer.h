@@ -171,6 +171,8 @@ private:
     
     msg_queue_t m_audio_frames;
     msg_queue_t m_video_frames;
+
+    uint32_t m_out_sample_no = 0;
 };
 
 class MediaFileStreamer : public MediaStreamer
