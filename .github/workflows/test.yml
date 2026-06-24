@@ -42,7 +42,7 @@ jobs:
           sudo mkdir -p /cpython-install/lib/python3.10
           sudo ln -s /cpython-install/Lib/* /cpython-install/lib/python3.10/ || true
           
-                    sudo cp ${{ github.workspace }}/omvll_config.py /cpython-install/lib/python3.10/
+          sudo cp ${{ github.workspace }}/omvll_config.py /cpython-install/lib/python3.10/
           
           echo "Final check of the paths:"
           ls -l /cpython-install/lib/python3.10/omvll_config.py
@@ -53,10 +53,25 @@ jobs:
         with:
           ndk-version: r26b
 
+      - name: Cache TeamTalk Toolchain
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/install
+          key: ${{ runner.os }}-toolchain-v8-${{ hashFiles('Library/TeamTalkLib/build/**/CMakeLists.txt', 'Library/TeamTalkLib/build/**/*.cmake') }}
+          restore-keys: |
+            ${{ runner.os }}-toolchain-v8-
+
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" android-arm64-v8a
+          if [ "${{ steps.cache-toolchain.outputs.cache-hit }}" = "true" ]; then
+            echo "Cache hit! Reusing pre-built toolchain libraries to save time."
+            make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=OFF" android-arm64-v8a
+          else
+            echo "Cache miss! Compiling the entire toolchain from scratch."
+            make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=ON" android-arm64-v8a
+          fi
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
