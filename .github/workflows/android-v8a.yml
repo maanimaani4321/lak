@@ -35,16 +35,41 @@ jobs:
       - name: export_artifacts
         if: always()
         run: |
-          mkdir -p final_output/binaries
-          mkdir -p final_output/dependencies
-          mkdir -p final_output/logs
-          
-          cp Build/build_v8_log.txt final_output/logs/ || true
-          
-          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
-          
-          mkdir -p final_output/teamtalk_headers
-          find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
+          export OUT_DIR="${{github.workspace}}/final_output"
+          mkdir -p $OUT_DIR/dependencies/webrtc/include
+          mkdir -p $OUT_DIR/dependencies/webrtc/lib
+          mkdir -p $OUT_DIR/dependencies/third_party
+          mkdir -p $OUT_DIR/teamtalk/bin
+          mkdir -p $OUT_DIR/teamtalk/include
+          mkdir -p $OUT_DIR/logs
+
+          cp Build/build_v8_log.txt $OUT_DIR/logs/ || true
+
+          if [ -d "${{runner.workspace}}/install-v8" ]; then
+            echo "Copying pre-built dependencies..."
+            cp -r ${{runner.workspace}}/install-v8/* $OUT_DIR/dependencies/third_party/ || true
+          fi
+
+          echo "Searching for WebRTC source headers..."
+          WEBRTC_PATH=$(find ${{github.workspace}}/.. -name "webrtc" -type d | head -n 1)
+          if [ -n "$WEBRTC_PATH" ]; then
+            cd "$WEBRTC_PATH"
+            find . -name "*.h" -exec cp --parents {} $OUT_DIR/dependencies/webrtc/include/ \; || true
+            cd ${{github.workspace}}
+          fi
+
+          echo "Collecting WebRTC static libraries..."
+          find Build/ -name "*.a" | grep -i "obj" | xargs -I{} cp {} $OUT_DIR/dependencies/webrtc/lib/ || true
+
+          echo "Collecting TeamTalk binaries..."
+          find . -name "libTeamTalk5*jni.so" -exec cp {} $OUT_DIR/teamtalk/bin/ \; || true
+
+          find Library/TeamTalk_DLL -name "*.a" -exec cp {} $OUT_DIR/teamtalk/bin/ \; || true
+
+          echo "Collecting TeamTalk headers..."
+          find Library/ -name "*.h" -exec cp --parents {} $OUT_DIR/teamtalk/include/ \; || true
+
+          rm -rf $OUT_DIR/dependencies/third_party/catch2 || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
