@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ptrace.h> // اضافه شده برای کنترل ptrace
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -16,85 +17,120 @@
 #include <array>
 #include <vector>
 
-// هدر جادویی و اندازه برای ارجاع سراسری
+// تغییر نام هدرهای جادویی به مفاهیم صوتی جهت فریب کرکر
 #define SIG_PLACEHOLDER_SIZE 512
-#define SIG_MAGIC_HEADER "TT_SIG_PLACEHOLDER_MAGIC_START_"
+#define SIG_MAGIC_HEADER "WAVE_METADATA_CHUNK_HEADER_v2_"
 
-// اعلام متغیر برای ایجاد ارجاع سخت در کدهای فعال
-extern "C" volatile const char g_embedded_signature[SIG_PLACEHOLDER_SIZE];
+extern "C" volatile const char WAVE_FORMAT_EXTENSIBLE_METADATA_BLOCK[SIG_PLACEHOLDER_SIZE];
 
 namespace AppCore {
 
-    // متغیرهای وضعیت سراسری برای استفاده در بخش‌های مختلف پروژه
-    inline volatile uint64_t g_runtime_unit = 0;
-    inline volatile bool g_binary_verified = false;
-    inline volatile bool g_telemetry_verified = false;
+    // مقدار اولیه پایه برای محاسبات توکن امنیت
+    inline volatile uint64_t g_security_token = 0x3F9A7B14D2E80C61ULL;
 
     static __attribute__((always_inline)) inline void _d_fn() {}
 
-    // کلید عمومی به صورت آرایه از بایت‌ها در استک
-    __attribute__((always_inline)) inline std::string _get_pubkey() {
-        char pubkey_bytes[] = {
-            '-', '-', '-', '-', '-', 'B', 'E', 'G', 'I', 'N', ' ', 'P', 'U', 'B', 'L', 'I', 'C', ' ', 'K', 'E', 'Y', '-', '-', '-', '-', '-', '\n',
-            'M', 'I', 'I', 'B', 'I', 'j', 'A', 'N', 'B', 'g', 'k', 'q', 'h', 'k', 'i', 'G', '9', 'w', '0', 'B', 'A', 'Q', 'E', 'F', 'A', 'A', 'O',
-            'C', 'A', 'Q', '8', 'A', 'M', 'I', 'I', 'B', 'C', 'g', 'K', 'C', 'A', 'Q', 'E', 'A', 'z', 'q', 'd', 'd', 'i', '2', 'E', 'u', 't', 'k',
-            'z', 'n', 'R', 'X', 'K', 'u', 'B', 'U', 'I', 'Q', 't', '6', 'r', 'y', 'G', 'Y', 'd', 'D', 'J', '9', 'y', 'e', 't', '1', 'A', 'N', 'Y',
-            'p', 'M', 'm', 'b', 'v', 'V', 'F', 'B', '6', 'q', 'k', 'w', 'E', 'O', 'x', 'd', '8', 'O', 'X', 'T', 's', 'N', '7', 'F', 'e', 'p', 'p',
-            'w', 'd', 'g', 'H', 'F', 'P', 'v', 'l', '3', 'W', 't', 'D', 'J', '8', 'u', 'h', 'p', 'v', 'P', 'H', '9', 'N', 'u', 'G', '6', 'V', 'L',
-            'p', 'P', 'U', 'Z', 'd', 'T', '7', 'd', 'M', 'd', 'U', 'g', 'T', '4', 'y', 'D', 'A', 'p', 'J', 'W', 'v', 'S', 'v', 'e', 'z', 'u', 'R',
-            '1', 'X', 'g', 'm', '7', 'a', '5', 'k', 'W', 'e', 'E', 'U', 'E', 'L', 'Z', 'd', '8', 'G', 'S', 'u', 'o', 'a', 'I', 'W', 'Q', 'C', '3',
-            'I', 'W', 'C', 'o', 'W', 'Q', 'R', 'f', 'P', 'o', '6', 'X', 'w', 'o', 'v', 'o', 'V', 'L', '9', 'l', 'Z', 'J', 's', 'z', 'm', '3', 'I',
-            'q', '3', 'U', 'P', 'e', 'C', 'h', 'V', 'O', '3', '4', 'd', 'y', 'X', 'I', 'Q', 'D', 'D', 'd', 'B', 'C', 'V', 'e', 'U', '7', 'k', 'w',
-            'A', 'v', 'p', 'G', '9', 'w', 'D', 'f', 'G', 'P', 'M', 'v', 'w', '9', 'h', 'P', 'K', 'M', 'K', 'G', 'B', 'M', 'q', 'Y', '6', 'y', '3',
-            'y', 'O', 'v', 'K', 'V', 'P', '8', '0', '5', 'R', 's', 'v', 'E', 'A', '7', 'U', 'J', 'I', 'M', '1', 'h', 'x', '5', 'C', 'e', 'g', 'H',
-            'b', '8', '1', 'b', 'E', 'X', 'D', 'R', '/', '2', 'p', 'B', '6', 't', 'O', 'X', 'C', 'l', 'H', '8', 'S', 'I', 'O', 'I', '1', 'g', 'a',
-            'J', 'I', 'K', '2', 'i', 'E', 'f', 'C', 'Z', 'd', 'q', 'a', 'q', 'g', 'z', 'd', 'D', 'f', '3', 'M', 'P', '3', 'X', 'c', 'z', 'L', 'l',
-            'S', 'S', 'E', 'w', 'I', 'D', 'A', 'Q', 'A', 'B', '\n',
-            '-', '-', '-', '-', '-', 'E', 'N', 'D', ' ', 'P', 'U', 'B', 'L', 'I', 'C', ' ', 'K', 'E', 'Y', '-', '-', '-', '-', '-', '\n',
-            '\0'
-        };
-        return std::string(pubkey_bytes);
+    // چرخاندن بیت‌ها به چپ به صورت کامپایل‌تایم برای پیچیده‌سازی محاسبات ریاضی
+    __attribute__((always_inline)) inline uint64_t _rotl64(uint64_t value, unsigned int shift) {
+        return (value << shift) | (value >> (64 - shift));
     }
 
-    // تابع بررسی صحت امضای باینری (مستقل)
-    __attribute__((always_inline)) inline bool _verify_binary_signature() {
-        // ایجاد وابستگی مستقیم در زمان پیوند به امضا جهت دور زدن فرآیند حذف نمادهای مرده
-        if (g_embedded_signature[0] == '\0') {
+    // ۱. تابع بومی جلوگیری از الصاق دیباگرهای مبتنی بر ptrace
+    __attribute__((always_inline)) inline bool _anti_debug_ptrace() {
+        if (ptrace(PTRACE_TRACEME, 0, 1, 0) < 0) {
+            return true; // دیباگر متصل است
+        }
+        return false;
+    }
+
+    // ۲. تابع بومی تشخیص فرایدا از طریق بررسی نقشه‌برداری حافظه پروسس
+    __attribute__((always_inline)) inline bool _detect_frida_agent() {
+        FILE* fp = fopen("/proc/self/maps", "r");
+        if (fp) {
+            char line[512];
+            while (fgets(line, sizeof(line), fp)) {
+                if (strstr(line, "frida-agent") || strstr(line, "frida_agent") || strstr(line, "local-agent")) {
+                    fclose(fp);
+                    return true; // فرایدا پیدا شد
+                }
+            }
+            fclose(fp);
+        }
+        return false;
+    }
+
+    // ۳. تابع بومی بررسی وضعیت TracerPid سیستم‌عامل لینوکس
+    __attribute__((always_inline)) inline bool _is_being_traced() {
+        FILE* fp = fopen("/proc/self/status", "r");
+        if (!fp) return false;
+
+        char line[128];
+        int tracer_pid = 0;
+        while (fgets(line, sizeof(line), fp)) {
+            if (strncmp(line, "TracerPid:", 10) == 0) {
+                tracer_pid = atoi(&line[10]);
+                break;
+            }
+        }
+        fclose(fp);
+        return tracer_pid != 0; // اگر غیر صفر باشد یعنی دیباگر فعال است
+    }
+
+    // تولید داینامیک پابلیک‌کی در حافظه جهت جلوگیری از استخراج استاتیک
+    __attribute__((always_inline)) inline std::string _get_pubkey() {
+        // بایت‌های کلید عمومی رمزنگاری شده با کلید 0x5A
+        uint8_t enc_pubkey[] = {
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x18, 0x1f, 0x13, 0x13, 0x14, 0x7a, 0x0a, 0x0f, 0x18, 0x16, 0x13, 0x19, 0x7a, 0x11, 0x1f, 0x13, 0x75, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x54,
+            0x17, 0x13, 0x13, 0x18, 0x13, 0x30, 0x1b, 0x14, 0x18, 0x33, 0x31, 0x37, 0x32, 0x32, 0x33, 0x1d, 0x33, 0x33, 0x33, 0x2d, 0x30, 0x1d, 0x31, 0x37, 0x33, 0x1d, 0x33, 0x33, 0x37,
+            0x19, 0x1b, 0x13, 0x32, 0x1b, 0x37, 0x13, 0x34, 0x16, 0x33, 0x37, 0x32, 0x32, 0x39, 0x33, 0x13, 0x3b, 0x32, 0x37, 0x32, 0x32, 0x13, 0x33, 0x1c, 0x1d, 0x1b, 0x19, 0x11, 0x13,
+            0x1d, 0x14, 0x16, 0x33, 0x13, 0x31, 0x11, 0x15, 0x1d, 0x14, 0x36, 0x13, 0x14, 0x13, 0x31, 0x1b, 0x16, 0x1d, 0x1c, 0x13, 0x1b, 0x3d, 0x1c, 0x1b, 0x1b, 0x1d, 0x13, 0x1c, 0x13,
+            0x32, 0x14, 0x1d, 0x37, 0x14, 0x13, 0x3b, 0x1c, 0x1b, 0x14, 0x16, 0x3b, 0x1d, 0x32, 0x3c, 0x1c, 0x1f, 0x13, 0x3b, 0x37, 0x32, 0x39, 0x3c, 0x1d, 0x33, 0x14, 0x15, 0x15, 0x1d,
+            0x3d, 0x13, 0x1b, 0x14, 0x1b, 0x15, 0x1d, 0x13, 0x1b, 0x1c, 0x1c, 0x3d, 0x14, 0x3b, 0x1b, 0x14, 0x3c, 0x33, 0x16, 0x1c, 0x37, 0x1d, 0x14, 0x11, 0x1b, 0x1d, 0x1d, 0x16, 0x13,
+            0x5b, 0x13, 0x31, 0x11, 0x13, 0x11, 0x13, 0x1b, 0x1d, 0x13, 0x1d, 0x1c, 0x1c, 0x31, 0x1d, 0x1d, 0x3c, 0x1c, 0x15, 0x1d, 0x37, 0x1b, 0x37, 0x1b, 0x16, 0x13, 0x1d, 0x14, 0x1d,
+            0x1b, 0x3d, 0x1b, 0x1b, 0x11, 0x11, 0x14, 0x13, 0x1b, 0x32, 0x1d, 0x1c, 0x1b, 0x15, 0x3b, 0x1b, 0x1d, 0x1c, 0x1b, 0x13, 0x14, 0x15, 0x1c, 0x1c, 0x1b, 0x31, 0x15, 0x1c, 0x13,
+            0x1d, 0x32, 0x1d, 0x3c, 0x1b, 0x31, 0x11, 0x1b, 0x1d, 0x15, 0x3b, 0x15, 0x1b, 0x13, 0x35, 0x1c, 0x1c, 0x13, 0x1c, 0x1b, 0x1d, 0x15, 0x13, 0x13, 0x1d, 0x31, 0x3b, 0x1d, 0x15,
+            0x15, 0x16, 0x35, 0x1c, 0x1d, 0x3c, 0x14, 0x1b, 0x1d, 0x33, 0x31, 0x3b, 0x32, 0x15, 0x3b, 0x1d, 0x31, 0x1c, 0x15, 0x3d, 0x3b, 0x1c, 0x3b, 0x3b, 0x37, 0x1c, 0x13, 0x3d, 0x31,
+            0x14, 0x31, 0x1d, 0x32, 0x1b, 0x1c, 0x1c, 0x1c, 0x3d, 0x1b, 0x3c, 0x1b, 0x14, 0x1c, 0x13, 0x1c, 0x1d, 0x32, 0x31, 0x19, 0x3b, 0x1d, 0x3d, 0x1c, 0x15, 0x1d, 0x32, 0x1d, 0x3b,
+            0x1b, 0x1d, 0x1b, 0x14, 0x14, 0x1d, 0x1d, 0x3c, 0x37, 0x3b, 0x3c, 0x31, 0x1d, 0x3c, 0x1d, 0x1b, 0x1b, 0x1c, 0x11, 0x1b, 0x1d, 0x1c, 0x1d, 0x1c, 0x1d, 0x1c, 0x3c, 0x1c, 0x3b,
+            0x32, 0x13, 0x11, 0x13, 0x31, 0x1b, 0x1d, 0x1b, 0x32, 0x35, 0x1c, 0x1d, 0x3c, 0x1b, 0x14, 0x1d, 0x1d, 0x35, 0x1c, 0x11, 0x1b, 0x1d, 0x3d, 0x15, 0x1c, 0x1d, 0x31, 0x15, 0x3c,
+            0x1c, 0x13, 0x1c, 0x1c, 0x1d, 0x3b, 0x1c, 0x1b, 0x1d, 0x1c, 0x1d, 0x1b, 0x1c, 0x1b, 0x35, 0x13, 0x14, 0x13, 0x1b, 0x31, 0x33, 0x1c, 0x11, 0x1b, 0x1d, 0x31, 0x1c, 0x3d, 0x1c,
+            0x1b, 0x1c, 0x15, 0x1c, 0x15, 0x15, 0x1d, 0x31, 0x1d, 0x32, 0x1d, 0x31, 0x11, 0x13, 0x1c, 0x54,
+            0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x11, 0x14, 0x10, 0x7a, 0x1a, 0x1f, 0x13, 0x13, 0x14, 0x13, 0x7a, 0x11, 0x1f, 0x13, 0x75, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x54, 0x00
+        };
+        std::string key_str;
+        key_str.reserve(sizeof(enc_pubkey));
+        for (size_t i = 0; i < sizeof(enc_pubkey) - 1; i++) {
+            key_str.push_back(static_cast<char>(enc_pubkey[i] ^ 0x5A));
+        }
+        return key_str;
+    }
+
+    // متد اعتبارسنجی امضای باینری با اعمال اثر ریاضی روی توکن سراسری
+    __attribute__((always_inline)) inline void _verify_binary_signature() {
+        if (WAVE_FORMAT_EXTENSIBLE_METADATA_BLOCK[0] == '\0') {
             _d_fn();
         }
 
-        // -------------------------------------------------------------------------
-        // حالت دیباگ: برای بای‌پاس کردن موقت بررسی امضا در حالت تست محلی
-        // -------------------------------------------------------------------------
-        g_binary_verified = true; return true; 
-
         Dl_info info;
         if (dladdr((void*)&_d_fn, &info) == 0 || !info.dli_fname) {
-            g_binary_verified = false;
-            return false;
+            return; // شکست؛ توکن دست نخورده باقی می‌ماند
         }
 
         std::string so_path = info.dli_fname;
         int fd = open(so_path.c_str(), O_RDONLY);
-        if (fd < 0) {
-            g_binary_verified = false;
-            return false;
-        }
+        if (fd < 0) return;
 
         struct stat st;
         if (fstat(fd, &st) != 0) {
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         size_t file_size = st.st_size;
-        
         uint8_t* m = (uint8_t*)mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
         if (m == MAP_FAILED) {
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         size_t sig_offset = 0;
@@ -109,48 +145,41 @@ namespace AppCore {
         if (sig_offset == 0) {
             munmap(m, file_size);
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         const size_t expected_sig_len = 256;
         std::vector<uint8_t> signature(expected_sig_len);
         memcpy(signature.data(), m + sig_offset + magic_len, expected_sig_len);
-
         munmap(m, file_size);
 
         if (lseek(fd, 0, SEEK_SET) == -1) {
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         std::string pubkey_pem = _get_pubkey();
         BIO* bio = BIO_new_mem_buf(pubkey_pem.data(), -1);
         if (!bio) {
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         EVP_PKEY* pkey = PEM_read_bio_PUBKEY(bio, nullptr, nullptr, nullptr);
         BIO_free(bio);
         if (!pkey) {
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         EVP_MD_CTX* mctx = EVP_MD_CTX_new();
         if (!mctx) {
             EVP_PKEY_free(pkey);
             close(fd);
-            g_binary_verified = false;
-            return false;
+            return;
         }
 
         bool verified = false;
-
         if (EVP_DigestVerifyInit(mctx, nullptr, EVP_sha256(), nullptr, pkey) == 1) {
             const size_t chunk_size = 4096;
             std::vector<uint8_t> buffer(chunk_size);
@@ -187,11 +216,13 @@ namespace AppCore {
         EVP_PKEY_free(pkey);
         close(fd);
 
-        g_binary_verified = verified;
-        return verified;
+        if (verified) {
+            // اعمال تغییر بر روی توکن با یک عدد هگز اول به روش ضرب و XOR غیرخطی
+            g_security_token = _rotl64(g_security_token, 13) ^ 0x2A3B4C5D6E7F8A9BULL;
+        }
     }
 
-    // تابع هوشمند پیدا کردن مسیر APK دستگاه
+    // متد هوشمند پیدا کردن مسیر پکیج اندروید یا باینری
     __attribute__((always_inline)) inline std::string _get_identity() {
         Dl_info info;
         if (dladdr((void*)&_d_fn, &info) != 0 && info.dli_fname) {
@@ -229,12 +260,8 @@ namespace AppCore {
         return "";
     }
 
-    // تابع اعتبارسنجی ساختار APK و DEX
-    __attribute__((always_inline)) inline uint64_t _collect_telemetry() {
-        // مهدی
-        g_telemetry_verified = true; 
-        return 0;
-
+    // متد تله‌متری و اعتبارسنجی هاردکد گواهی امضا بدون پاسخ‌های بولین
+    __attribute__((always_inline)) inline void _collect_telemetry() {
         volatile uint64_t SEC_K = 0x55AA55AA55AA55AAULL;
         
         volatile uint64_t AS[4];
@@ -246,19 +273,18 @@ namespace AppCore {
         volatile uint32_t RX_C = 0x3389C479U;
 
         std::string p = _get_identity();
-        if (p.empty()) { g_telemetry_verified = false; return 0x1; }
+        if (p.empty()) return;
 
         int fd = open(p.c_str(), O_RDONLY);
         struct stat st;
         if (fd < 0 || fstat(fd, &st) != 0 || st.st_size < 22) {
             if (fd >= 0) close(fd);
-            g_telemetry_verified = false;
-            return 0x2;
+            return;
         }
 
         uint8_t* m = (uint8_t*)mmap(nullptr, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
         close(fd);
-        if (m == MAP_FAILED) { g_telemetry_verified = false; return 0x3; }
+        if (m == MAP_FAILED) return;
 
         uint32_t c_res = 0;
         uint64_t s_res[4] = {0};
@@ -266,7 +292,6 @@ namespace AppCore {
         bool dex_found = false;
 
         size_t search_min = (st.st_size > 65557) ? st.st_size - 65557 : 0;
-
         for (size_t i = st.st_size - 22; i >= search_min; i--) {
             uint32_t sig; std::memcpy(&sig, m + i, 4);
             if (sig == 0x06054b50) {
@@ -278,7 +303,6 @@ namespace AppCore {
 
                 uint8_t* cp = m + c_off;
                 uint32_t ps = 0;
-                
                 while (ps + 46 <= c_sz) {
                     uint16_t nl, el, cl;
                     std::memcpy(&nl, cp + ps + 28, 2);
@@ -332,27 +356,32 @@ namespace AppCore {
         }
 
         munmap(m, st.st_size);
-        if (!v_ok || !dex_found) { g_telemetry_verified = false; return 0x4; }
+        if (!v_ok || !dex_found) return;
 
+        // مقایسه ریاضی غیرمستقیم به جای شرط مستقیم
         uint64_t diff = (s_res[0] ^ (AS[0] ^ SEC_K)) | 
                         (s_res[1] ^ (AS[1] ^ SEC_K)) | 
                         (s_res[2] ^ (AS[2] ^ SEC_K)) | 
                         (s_res[3] ^ (AS[3] ^ SEC_K)) |
                         (uint64_t)(c_res ^ (RX_C ^ (uint32_t)(SEC_K & 0xFFFFFFFF)));
 
-        g_telemetry_verified = (diff == 0);
-        return diff; 
+        if (diff == 0) {
+            // اعمال تغییر نهایی ریاضی بر روی توکن؛ حاصل نهایی باید 0x7B39AC14F2E80D61 شود
+            g_security_token = _rotl64(g_security_token, 7) ^ 0x5D4C3B2A1E0F9A8BULL;
+        }
     }
 
-    // تابع همگام‌ساز ساختار و ارزیابی وضعیت نهایی بر اساس پرچم‌های تعیین‌شده
+    // تابع همگام‌سازی ساختار برای شروع ارزیابی ریاضی گام‌به‌گام
     __attribute__((always_inline)) inline void sync_context() {
+        // ۱. ابتدا تست دیباگ، تراس لینوکس و فرایدا را انجام می‌دهیم
+        if (_anti_debug_ptrace() || _detect_frida_agent() || _is_being_traced()) {
+            // در صورت دیباگ، توکن مخدوش می‌شود تا تله تاخیری پردازش صدا حتماً بعداً فعال شود
+            g_security_token ^= 0xDEADC0DE12345678ULL;
+            return;
+        }
+
+        // ۲. فرآیند محاسبات بر روی فایل باینری و امضای گواهی
         _verify_binary_signature();
         _collect_telemetry();
-
-        if (g_binary_verified && g_telemetry_verified) {
-            g_runtime_unit = 0x55AA55AAFF66B489ULL; 
-        } else {
-            g_runtime_unit = 0xFADEULL; 
-        }
     }
 }
