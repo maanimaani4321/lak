@@ -6056,5 +6056,82 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 }
 
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
-    m_voice_thread.FeedToInsertAudioBlock(buffer, samples, m_soundprop.inputdeviceid);
+    if (m_voice_thread.Codec().codec == teamtalk::CODEC_NO_CODEC) return;
+
+    auto target_fmt = GetAudioCodecAudioFormat(m_voice_thread.Codec());
+    int target_samples = GetAudioCodecCbSamples(m_voice_thread.Codec());
+    media::AudioFormat source_fmt(48000, 2);
+
+    if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
+        m_internal_push_resampler->GetOutputFormat() != target_fmt) {
+        m_internal_push_resampler = MakeAudioResampler(source_fmt, target_fmt);
+        m_internal_push_resample_buf.resize(target_samples * target_fmt.channels * 4);
+    }
+
+    std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
+
+    int in_frames = samples / source_fmt.channels;
+    int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
+                                                          m_internal_push_resample_buf.data(), 
+                                                          (int)m_internal_push_resample_buf.size());
+
+    if (out_samples > 0) {
+        m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
+                                     m_internal_push_resample_buf.begin(), 
+                                     m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
+    }
+
+    int max_buffer_samples = target_fmt.samplerate * target_fmt.channels * 2; // حداکثر بافر ۲ ثانیه
+    int trim_samples = target_fmt.samplerate * target_fmt.channels * 0.5; // هرس کردن مازاد بافر
+
+    if (m_internal_audio_fifo.size() > (size_t)max_buffer_samples) {
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), 
+                                     m_internal_audio_fifo.begin() + trim_samples);
+        MYTRACE(ACE_TEXT("ClientNode: Internal buffer overflow! Trimmed 500ms of old data.\n"));
+    }
+
+    int required_total = target_samples * target_fmt.channels;
+    int wait_frames = 5;
+    int wait_threshold = wait_frames * required_total;
+
+    if (m_internal_buffering) {
+        if (m_internal_audio_fifo.size() >= (size_t)wait_threshold) {
+            m_internal_buffering = false;
+        } else {
+            return;
+        }
+    }
+
+    while (m_internal_audio_fifo.size() >= (size_t)required_total) {
+        // فریم داده جدا شده را همینجا بساز تا هر دو بخش امن و مستقل از تغییرات بعدی FIFO از آن استفاده کنند
+        std::vector<short> frame_data(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+
+        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
+            if (m_voice_stream_id == 0) {
+                m_voice_stream_id = 1;
+            }
+            
+            // متغیر اضافه و بدون استفاده حذف شد
+            ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, frame_data.data(), target_samples));
+            auto* raw_frame = AudioFrameFromMsgBlock(mb);
+            raw_frame->userdata = STREAMTYPE_VOICE;
+            raw_frame->force_enc = true;
+            raw_frame->streamid = m_voice_stream_id;
+            raw_frame->sample_no = m_soundprop.samples_recorded;
+            m_soundprop.samples_recorded += target_samples;
+            raw_frame->timestamp = GETTIMESTAMP();
+
+            m_voice_thread.QueueAudio(mb);
+        } else {
+            // حالا با پاس دادن فریم مجزا، کاملاً از امنیت داده‌ها در این بخش مطمئن هستیم
+            m_voice_thread.FeedToInsertAudioBlock(frame_data.data(), target_samples);
+        }
+        
+        // پاک کردن امن بافر اصلی بدون آسیب زدن به پوینترها
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+    }
+
+    if (m_internal_audio_fifo.empty()) {
+        m_internal_buffering = true;
+    }
 }
