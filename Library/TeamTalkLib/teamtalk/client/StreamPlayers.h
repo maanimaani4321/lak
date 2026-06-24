@@ -31,6 +31,12 @@
 #include <mutex>
 #include <string>
 
+// تعریف ساختارها در فضای نام عمومی برای مطابقت با FFmpeg
+extern "C" {
+    struct AVFilterGraph;
+    struct AVFilterContext;
+}
+
 constexpr auto STOPPED_TALKING_DELAY = 500; //msec
 
 namespace teamtalk {
@@ -97,9 +103,9 @@ namespace teamtalk {
         std::recursive_mutex m_preprocess_lock;
         std::string m_ffmpeg_filter_str;
         bool m_filter_changed = false;
-        struct AVFilterGraph* m_filter_graph = nullptr;
-        struct AVFilterContext* m_buffersink_ctx = nullptr;
-        struct AVFilterContext* m_buffersrc_ctx = nullptr;
+        ::AVFilterGraph* m_filter_graph = nullptr;
+        ::AVFilterContext* m_buffersink_ctx = nullptr;
+        ::AVFilterContext* m_buffersrc_ctx = nullptr;
         std::vector<short> m_filter_fifo;
 
         bool InitFFmpegFilter(int samplerate, int channels);
