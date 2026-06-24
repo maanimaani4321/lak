@@ -10,7 +10,13 @@ class MyConfig(omvll.ObfuscationConfig):
             "initsoundinputdevice",
             "setvoicegainlevel",
             "processaudioframe",
-            "savefile"
+            "savefile",
+            "pushinternalaudio",
+            "feedtoinsertaudioblock",
+            "startinternalvideotransmission",
+            "stopinternalvideotransmission",
+            "pushinternalvideo",
+            "feedtoinsertvideoframe"
         ]
 
     def is_target_function(self, func: omvll.Function) -> bool:
