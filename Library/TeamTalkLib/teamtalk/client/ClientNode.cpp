@@ -1285,7 +1285,11 @@ void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& streamer,
         if (m_callback_fifo.size() >= (size_t)required_total) {
             has_push_audio = true;
             
-            bool mic_is_open = m_voice_thread.IsVoiceActive() || ((m_flags & CLIENT_TX_VOICE) != 0);
+            bool ptt_active = (m_flags & CLIENT_TX_VOICE) != 0;
+bool vad_enabled = (m_flags & CLIENT_SNDINPUT_VOICEACTIVATED) != 0;
+bool vad_triggered = m_voice_thread.IsVoiceActive();
+
+bool mic_is_open = ptt_active || (vad_enabled && vad_triggered);
 
             if (mic_is_open) {
                 for (int i = 0; i < required_total; ++i) {
@@ -6153,7 +6157,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     }
 
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
-        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID)  {
+        if (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) {
             if (m_voice_stream_id == 0) {
                 m_voice_stream_id = 1;
             }
@@ -6174,9 +6178,6 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
         m_voice_thread.QueueAudio(mb);
         } else {
-                if (m_voice_stream_id == 0) {
-        m_voice_stream_id = 1; 
-    }
             m_callback_fifo.insert(m_callback_fifo.end(), 
                                    m_internal_audio_fifo.begin(), 
                                    m_internal_audio_fifo.begin() + required_total);
