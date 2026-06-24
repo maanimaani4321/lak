@@ -503,27 +503,34 @@ extern "C" {
     }
 
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalAudio(JNIEnv* env,
-                                                                            jobject thiz,
-                                                                            jshortArray data,
-                                                                            jint gain,
-                                                                            jboolean forceTransmitCheck)
+                                                                           jobject thiz,
+                                                                           jshortArray data,
+                                                                           jint samples,
+                                                                           jint gain,
+                                                                           jboolean forceTransmitCheck)
     {
+        // بررسی عدم null بودن آرایه ورودی برای جلوگیری از کرش JVM
+        THROW_NULLEX(env, data, ); 
+
         // ۱. گرفتن نمونه کلاینت
         TTInstance* inst = GetTTInstance(env, thiz);
         if (inst == nullptr) return;
 
-        // ۲. گرفتن داده‌ها از جاوا
-        jsize len = env->GetArrayLength(data);
+        // ۲. بررسی اعتبار طول داده‌ها
+        jsize arrayLen = env->GetArrayLength(data);
+        if (samples > arrayLen) samples = arrayLen;
+
+        // ۳. دسترسی به داده‌های آرایه بدون کپی کردن
         jshort* body = env->GetShortArrayElements(data, nullptr);
         if (body == nullptr) return;
 
-        // تبدیل jboolean به فرمت مورد نیاز TTBOOL (که معمولاً یک نوع صحیح/boolean است)
+        // تبدیل jboolean به TTBOOL
         TTBOOL const bForceTransmit = forceTransmitCheck ? JTRUE : JFALSE;
 
-        // ۳. تزریق به پل ارتباطی با پارامترهای جدید
-        TT_PushInternalAudio(inst, (const short*)body, (int)len, (int)gain, bForceTransmit);
+        // ۴. فراخوانی تابع اصلی با تعداد سمیپل‌های مشخص شده
+        TT_PushInternalAudio(inst, (const short*)body, (int)samples, (int)gain, bForceTransmit);
 
-        // ۴. آزاد کردن حافظه جاوا
+        // ۵. آزاد کردن دسترسی به آرایه
         env->ReleaseShortArrayElements(data, body, JNI_ABORT);
     }
     

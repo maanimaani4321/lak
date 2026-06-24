@@ -6087,7 +6087,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples, int ga
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
 
     int in_frames = samples / source_fmt.channels;
-    int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
+        int out_samples = m_internal_push_resampler->Resample(gained_buffer.data(), in_frames, 
                                                           m_internal_push_resample_buf.data(), 
                                                           (int)m_internal_push_resample_buf.size());
 
