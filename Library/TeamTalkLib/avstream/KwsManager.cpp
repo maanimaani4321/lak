@@ -203,9 +203,9 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             auto segment = g_state.vad->Front();
             g_state.vad->Pop();
 
-            if (segment.samples && segment.n > 0) {
+            if (!segment.samples.empty()) {
                 // ارسال بخش بریده شده و تایید شده صدای انسان به موتور کلمات کلیدی KWS
-                g_state.stream->AcceptWaveform(16000, segment.samples, segment.n);
+                g_state.stream->AcceptWaveform(16000, segment.samples.data(), segment.samples.size());
 
                 while (g_state.spotter->IsReady(g_state.stream.get())) {
                     g_state.spotter->Decode(g_state.stream.get());
