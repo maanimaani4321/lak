@@ -23,7 +23,7 @@ class MyConfig(omvll.ObfuscationConfig):
     def is_too_heavy(self, mod: omvll.Module):
         path = mod.name.lower()
         # این فایل‌ها بسیار بزرگ هستند و باعث کرش Clang می‌شوند
-        heavy_files = ["clientnode.cpp", "clientuser.cpp", "teamtalk.cpp", "servernode.cpp"]
+        heavy_files = ["clientnode.cpp", "clientuser.cpp", "teamtalk.cpp", "servernode.cpp", "serverchannel.cpp"]
         return any(f in path for f in heavy_files)
 
     def obfuscate_arithmetic(self, mod, func):
