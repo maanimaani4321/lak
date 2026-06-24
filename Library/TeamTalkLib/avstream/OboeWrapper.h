@@ -1,4 +1,26 @@
-/* OboeWrapper.h */
+/*
+ * Copyright (c) 2005-2018, BearWare.dk
+ * 
+ * Contact Information:
+ *
+ * Bjoern D. Rasmussen
+ * Kirketoften 5
+ * DK-8260 Viby J
+ * Denmark
+ * Email: contact@bearware.dk
+ * Phone: +45 20 20 54 59
+ * Web: http://www.bearware.dk
+ *
+ * This source code is part of the TeamTalk SDK owned by
+ * BearWare.dk. Use of this file, or its compiled unit, requires a
+ * TeamTalk SDK License Key issued by BearWare.dk.
+ *
+ * The TeamTalk SDK License Agreement along with its Terms and
+ * Conditions are outlined in the file License.txt included with the
+ * TeamTalk SDK distribution.
+ *
+ */
+
 #ifndef OBOEWRAPPER_H
 #define OBOEWRAPPER_H
 
@@ -24,7 +46,9 @@ namespace soundsystem {
     struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
-        std::vector<short> cb_buffer; // بافری دقیقاً به اندازه نیاز تیم‌تاک
+        std::vector<short> cb_buffer;   // Buffer aligned with TeamTalk requirements
+        std::vector<short> fifo_buffer; // Playback FIFO buffer for frame size adaptation
+        int fifo_size = 0;
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
@@ -67,7 +91,7 @@ namespace soundsystem {
         bool StopStream(outputstreamer_t streamer) override;
         bool IsStreamStopped(outputstreamer_t streamer) override;
 
-        // Duplex (دقیقاً مشابه ساختاری که خودتان در کد اصلی فرستادید)
+        // Duplex (Stubs as per TeamTalk architecture; routed via separate streams)
         duplexstreamer_t NewStream(StreamDuplex* duplex, int inputdeviceid, int outputdeviceid, int sndgrpid, int samplerate, int input_channels, int output_channels, int framesize) override { return nullptr; }
         void CloseStream(duplexstreamer_t streamer) override { }
         bool StartStream(duplexstreamer_t streamer) override { return false; }
