@@ -80,7 +80,7 @@ namespace teamtalk {
         m_active = false;
     }
 
-    int LameEncoder::ProcessAudioEncoder(const media::AudioFrame& frame, bool flush)
+    int LameEncoder::ProcessAudioEncoder(const media::AudioFrame& frame)
     {
         if (m_lame == nullptr || !m_active)
             return -1;
@@ -98,9 +98,10 @@ namespace teamtalk {
             }
             else
             {
+                // برای امنیت بیشتر در حالت مونو، بافر را برای هر دو کانال چپ و راست می‌فرستیم
                 write_bytes = lame_encode_buffer(m_lame, 
                                                  frame.input_buffer, 
-                                                 nullptr, 
+                                                 frame.input_buffer, 
                                                  frame.input_samples, 
                                                  m_mp3_buffer.data(), 
                                                  static_cast<int>(m_mp3_buffer.size()));
@@ -114,16 +115,6 @@ namespace teamtalk {
             if (write_bytes > 0)
             {
                 m_file.Write(reinterpret_cast<const char*>(m_mp3_buffer.data()), write_bytes);
-            }
-        }
-
-        if (flush)
-        {
-            int flush_bytes = lame_encode_flush(m_lame, m_mp3_buffer.data(), m_mp3_buffer.size());
-            if (flush_bytes > 0)
-            {
-                m_file.Write(reinterpret_cast<const char*>(m_mp3_buffer.data()), flush_bytes);
-                write_bytes += flush_bytes;
             }
         }
 

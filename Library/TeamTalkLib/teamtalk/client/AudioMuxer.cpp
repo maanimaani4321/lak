@@ -860,7 +860,7 @@ void AudioMuxer::WriteAudio(int cb_samples, teamtalk::StreamTypes sts)
 #elif defined(ENABLE_LAME)
     if(m_mp3encoder && m_inputformat.samples)
     {
-        m_mp3encoder->ProcessAudioEncoder(frame, true);
+        m_mp3encoder->ProcessAudioEncoder(frame);
     }
 #endif
 

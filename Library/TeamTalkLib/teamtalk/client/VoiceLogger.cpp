@@ -435,7 +435,7 @@ void VoiceLog::WriteAudio(int packet_no)
     {
         media::AudioFormat fmt = GetAudioCodecAudioFormat(m_codec);
         int samples = GetAudioCodecCbSamples(m_codec);
-        m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], samples), true);
+        m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], samples));
     }
 #endif
     if(m_wavfile)
@@ -462,7 +462,7 @@ void VoiceLog::WriteSilence(int msecs)
             m_mp3transform->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], cbsamples), true);
 #elif defined(ENABLE_LAME)
         if(m_lameencoder)
-            m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], cbsamples), true);
+            m_lameencoder->ProcessAudioEncoder(media::AudioFrame(fmt, &m_samples_buf[0], cbsamples));
 #endif
         if(m_wavfile)
             m_wavfile->AppendSamples(m_samples_buf.data(), GetAudioCodecCbSamples(m_codec));

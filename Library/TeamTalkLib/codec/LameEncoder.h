@@ -23,7 +23,7 @@ namespace teamtalk {
         bool Init(const media::AudioFormat& format, int bitrate, const ACE_TString& filename);
         void Close();
 
-        int ProcessAudioEncoder(const media::AudioFrame& frame, bool flush);
+        int ProcessAudioEncoder(const media::AudioFrame& frame);
 
     private:
         lame_t m_lame = nullptr;
