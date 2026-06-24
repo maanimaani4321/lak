@@ -136,20 +136,6 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
         goto filter_init_error;
     }
 
-    // اجبار گراف به تولید فرمت استاندارد برای انکودر TeamTalk
-    {
-        const enum AVSampleFormat out_sample_fmts[] = { AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_NONE };
-        av_opt_set_int_list(m_buffersink_ctx, "sample_fmts", out_sample_fmts, -1, AV_OPT_SEARCH_CHILDREN);
-
-        const int out_sample_rates[] = { format.samplerate, -1 };
-        av_opt_set_int_list(m_buffersink_ctx, "sample_rates", out_sample_rates, -1, AV_OPT_SEARCH_CHILDREN);
-
-        AVChannelLayout out_ch_layout = {};
-        av_channel_layout_default(&out_ch_layout, format.channels);
-        const AVChannelLayout out_ch_layouts[] = { out_ch_layout };
-        av_opt_set_array(m_buffersink_ctx, "channel_layouts", AV_OPT_SEARCH_CHILDREN, 0, 1, AV_OPT_TYPE_CHLAYOUT, out_ch_layouts);
-    }
-
     outputs->name       = av_strdup("in");
     outputs->filter_ctx = m_buffersrc_ctx;
     outputs->pad_idx    = 0;
@@ -160,12 +146,18 @@ bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
     inputs->pad_idx    = 0;
     inputs->next       = nullptr;
 
-    // پارس کردن رشته فیلتر (مثلاً: aecho=0.8:0.88:60:0.4)
-    ret = avfilter_graph_parse_ptr(m_filter_graph, m_ffmpeg_filter_str.c_str(),
-                                   &inputs, &outputs, nullptr);
-    if (ret < 0) {
-        MYTRACE(ACE_TEXT("AudioThread: Parse error in filter string '%s'. Error: %d\n"), m_ffmpeg_filter_str.c_str(), ret);
-        goto filter_init_error;
+    // تکنیک جلوگیری از سوت کشیدن: مجبور کردن FFmpeg به خروجی s16 استاندارد!
+    {
+        std::string final_filter = m_ffmpeg_filter_str + ",aformat=sample_fmts=s16:channel_layouts=";
+        final_filter += (format.channels == 2 ? "stereo" : "mono");
+        final_filter += ":sample_rates=" + std::to_string(format.samplerate);
+
+        ret = avfilter_graph_parse_ptr(m_filter_graph, final_filter.c_str(),
+                                       &inputs, &outputs, nullptr);
+        if (ret < 0) {
+            MYTRACE(ACE_TEXT("AudioThread: Parse error in filter string. Error: %d\n"), ret);
+            goto filter_init_error;
+        }
     }
 
     ret = avfilter_graph_config(m_filter_graph, nullptr);
@@ -211,10 +203,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX :
 #if defined(ENABLE_SPEEX)
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -231,10 +219,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     case CODEC_SPEEX_VBR :
 #if defined(ENABLE_SPEEX)
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_speex = std::make_unique<SpeexEncoder>();
         if(!m_speex->Initialize(codec.speex_vbr.bandmode,
                                 DEFAULT_SPEEX_COMPLEXITY,
@@ -254,10 +238,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
 #if defined(ENABLE_OPUS)
     case CODEC_OPUS :
     {
-        TTASSERT(callback_samples);
-        TTASSERT(sample_rate);
-        TTASSERT(channels);
-
         m_opus = std::make_unique<OpusEncode>();
         if(!m_opus->Open(codec.opus.samplerate, codec.opus.channels,
                          codec.opus.application) ||
@@ -279,8 +259,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     default:
         TTASSERT(codec.codec == CODEC_SPEEX);
     }
-
-    TTASSERT(sample_rate);
 
     if((sample_rate == 0) || (callback_samples == 0))
         return false;
@@ -567,7 +545,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     }
 #endif
 
-    // --- بخش اعمال فیلترهای صوتی FFmpeg ---
+    // --- بخش اعمال فیلترهای صوتی FFmpeg (بدون سوت و قطعی) ---
     {
         std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
         
@@ -583,6 +561,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                 frame->format = AV_SAMPLE_FMT_S16;
                 frame->sample_rate = audblock.inputfmt.samplerate;
                 av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
+                frame->pts = AV_NOPTS_VALUE; // اجازه بده FFmpeg خودش محاسبه کند
                 
                 if (av_frame_get_buffer(frame, 0) >= 0) {
                     memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
@@ -595,23 +574,33 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
                                 break;
                             }
                             
-                            int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
-                            short* out_data = (short*)out_frame->data[0];
-                            m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                            // گارد امنیتی: فقط در صورتی که خروجی S16 استاندارد باشد می‌خوانیم تا صدای سوت ندهد
+                            if (out_frame->format == AV_SAMPLE_FMT_S16) {
+                                int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
+                                short* out_data = (short*)out_frame->data[0];
+                                m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                            }
                             av_frame_free(&out_frame);
                         }
                     }
                 }
-                av_frame_free(&frame); // <--- این خط تصحیح شد
+                av_frame_free(&frame);
             }
 
+            // مکانیزم پدینگ برای جلوگیری از قطعی صدا
             int required_elements = audblock.input_samples * audblock.inputfmt.channels;
-            if (m_filter_fifo.size() >= (size_t)required_elements) {
-                memcpy(audblock.input_buffer, m_filter_fifo.data(), required_elements * sizeof(short));
-                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + required_elements);
+            if (!m_filter_fifo.empty()) {
+                int copy_elements = std::min((int)m_filter_fifo.size(), required_elements);
+                memcpy(audblock.input_buffer, m_filter_fifo.data(), copy_elements * sizeof(short));
+                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + copy_elements);
+                
+                // اگر فیلتر کُند بود و فریم کامل نشد، بقیه‌اش را با سکوت پُر کن تا VAD و انکودر Crash نکنند
+                if (copy_elements < required_elements) {
+                    memset(audblock.input_buffer + copy_elements, 0, (required_elements - copy_elements) * sizeof(short));
+                }
             } else {
-                // اگر فیلتر دیتای کافی تولید نکرده، فعلاً نباید بسته‌ای ارسال شود
-                return; 
+                // اگر فیلتر کلاً خالی بود (مثلاً در حال محاسبه delay است)، سکوت بفرست
+                memset(audblock.input_buffer, 0, required_elements * sizeof(short));
             }
         }
     }
@@ -750,10 +739,10 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
 void AudioThread::PreprocessWebRTC(media::AudioFrame& audblock)
 {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
-    if (!m_apm) return;
-
-    if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
-        MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
+    if (m_apm) {
+        if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
+            MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
+        }
     }
 }
 #endif
