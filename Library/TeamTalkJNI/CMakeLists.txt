@@ -27,6 +27,7 @@ if (JNI_FOUND OR ${CMAKE_SYSTEM_NAME} MATCHES "Android")
 
     include_directories (../../Library/TeamTalk_DLL ${JNI_INCLUDE_DIRS})
     include_directories (${CMAKE_CURRENT_SOURCE_DIR}/../sherpa-onnx/include)
+    include_directories (${CMAKE_CURRENT_SOURCE_DIR}/../TeamTalkLib)
 
     if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
       link_directories (../../Library/TeamTalk_DLL/${CMAKE_ANDROID_ARCH_ABI})
