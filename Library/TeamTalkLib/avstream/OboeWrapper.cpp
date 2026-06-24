@@ -116,8 +116,7 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
 // INPUT STREAMER (Microphone)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    std::lock_guard<std::recursive_mutex> g(mutex);
-    
+    // حذف قفل صوتی برای جلوگیری از بن‌بست صوتی هماهنگ با رهنمودهای زمان‌واقعی Oboe
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
@@ -143,6 +142,10 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     return oboe::DataCallbackResult::Continue;
 }
 
+void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) {
+    MYTRACE(ACE_TEXT("Oboe Input Stream closed. Error/Reason: %s\n"), oboe::convertToText(error));
+}
+
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeInputStreamer>(capture, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, inputdeviceid);
 
@@ -156,6 +159,12 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setChannelCount(channels);
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
+    builder.setErrorCallback(streamer.get()); // Register error callback
+
+    // فعال‌سازی تبدیل‌های سخت‌افزاری خودکار برای سازگاری کامل با تراشه‌های مختلف
+    builder.setChannelConversionAllowed(true);
+    builder.setFormatConversionAllowed(true);
+    builder.setSampleRateConversionAllowed(true);
 
     if (inputdeviceid == VOICECOM_DEVICE_ID) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
@@ -170,6 +179,15 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
+    
+    // Fallback: If opening chosen hardware device failed, fall back to default (0)
+    if (result != oboe::Result::OK && inputdeviceid != DEFAULT_DEVICE_ID) {
+        MYTRACE(ACE_TEXT("Oboe: Selected input device %d failed to open (%s). Falling back to default (0).\n"), 
+                inputdeviceid, oboe::convertToText(result));
+        builder.setDeviceId(oboe::kUnspecified); // Reset device selection
+        result = builder.openStream(streamer->stream);
+    }
+
     if (result != oboe::Result::OK) {
         MYTRACE(ACE_TEXT("Failed to open Oboe input stream: %s\n"), oboe::convertToText(result));
         return nullptr;
@@ -208,8 +226,7 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t) {
 // OUTPUT STREAMER (Speaker / Earpiece)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
-    std::lock_guard<std::recursive_mutex> g(mutex);
-    
+    // حذف قفل صوتی برای جلوگیری از بن‌بست صوتی هماهنگ با رهنمودهای زمان‌واقعی Oboe
     short* outData = static_cast<short*>(audioData);
     int totalOutgoingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
@@ -250,6 +267,10 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     return more ? oboe::DataCallbackResult::Continue : oboe::DataCallbackResult::Stop;
 }
 
+void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) {
+    MYTRACE(ACE_TEXT("Oboe Output Stream closed. Error/Reason: %s\n"), oboe::convertToText(error));
+}
+
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
@@ -264,6 +285,12 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setChannelCount(channels);
     builder.setSampleRate(samplerate);
     builder.setDataCallback(streamer.get());
+    builder.setErrorCallback(streamer.get()); // Register error callback
+
+    // فعال‌سازی تبدیل‌های سخت‌افزاری خودکار برای سازگاری کامل با تراشه‌های مختلف
+    builder.setChannelConversionAllowed(true);
+    builder.setFormatConversionAllowed(true);
+    builder.setSampleRateConversionAllowed(true);
 
     if (outputdeviceid == VOICECOM_DEVICE_ID) {
         builder.setUsage(oboe::Usage::VoiceCommunication);
@@ -280,6 +307,15 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     }
 
     oboe::Result result = builder.openStream(streamer->stream);
+
+    // Fallback: If opening chosen hardware output failed, fall back to default (0)
+    if (result != oboe::Result::OK && outputdeviceid != DEFAULT_DEVICE_ID) {
+        MYTRACE(ACE_TEXT("Oboe: Selected output device %d failed to open (%s). Falling back to default (0).\n"), 
+                outputdeviceid, oboe::convertToText(result));
+        builder.setDeviceId(oboe::kUnspecified); // Reset device selection
+        result = builder.openStream(streamer->stream);
+    }
+
     if (result != oboe::Result::OK) {
         MYTRACE(ACE_TEXT("Failed to create Oboe audio player: %s\n"), oboe::convertToText(result));
         return nullptr;

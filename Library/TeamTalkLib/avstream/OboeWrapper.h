@@ -31,7 +31,7 @@
 
 namespace soundsystem {
 
-    struct OboeInputStreamer : InputStreamer, public oboe::AudioStreamDataCallback {
+    struct OboeInputStreamer : InputStreamer, public oboe::AudioStreamDataCallback, public oboe::AudioStreamErrorCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
         std::vector<short> fifo_buffer;
@@ -41,9 +41,10 @@ namespace soundsystem {
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
 
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
+        void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
     };
 
-    struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback {
+    struct OboeOutputStreamer : OutputStreamer, public oboe::AudioStreamDataCallback, public oboe::AudioStreamErrorCallback {
         std::shared_ptr<oboe::AudioStream> stream;
         std::recursive_mutex mutex;
         std::vector<short> cb_buffer;   // Buffer aligned with TeamTalk requirements
@@ -54,6 +55,7 @@ namespace soundsystem {
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
 
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
+        void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
     };
 
     struct OboeSoundGroup : SoundGroup {
