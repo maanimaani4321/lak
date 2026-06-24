@@ -68,42 +68,42 @@ std::shared_ptr<OboeWrapper> OboeWrapper::getInstance() {
 // Thread Safe Validation & Reconnect Logic
 // ---------------------------------------------------------
 bool OboeWrapper::IsCaptureValid(StreamCapture* capture) {
-    std::lock_guard<std::recursive_mutex> g(CaptureLock());
-    // استفاده از پوینتر بومی کلاس والد به جای لوپ‌های مکرر فرعی صوتی
-    return static_cast<bool>(GetStream(capture, true, false));
+    // SSB::GetStream manages its own locking, no need to lock CaptureLock manually!
+    return SSB::GetStream(capture, true, false) != nullptr;
 }
 
 bool OboeWrapper::IsPlayerValid(StreamPlayer* player) {
-    std::lock_guard<std::recursive_mutex> g(PlayersLock());
-    return static_cast<bool>(GetStream(player));
+    // SSB::GetStream manages its own locking
+    return SSB::GetStream(player) != nullptr;
 }
 
 void OboeWrapper::SafeRestartInputStream(StreamCapture* capture) {
-    std::lock_guard<std::recursive_mutex> g(CaptureLock());
-    inputstreamer_t streamer = GetStream(capture, true, false);
+    inputstreamer_t streamer = SSB::GetStream(capture, true, false);
     if (streamer) {
         int sndgrpid = streamer->sndgrpid;
         int samplerate = streamer->samplerate;
         int channels = streamer->channels;
         int framesize = streamer->framesize;
         
-        CloseInputStream(capture);
-        OpenInputStream(capture, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
+        // These methods handle their own mutex locking inside SoundSystemBase
+        SSB::CloseInputStream(capture);
+        SSB::OpenInputStream(capture, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
     }
 }
 
 void OboeWrapper::SafeRestartOutputStream(StreamPlayer* player) {
-    std::lock_guard<std::recursive_mutex> g(PlayersLock());
-    outputstreamer_t streamer = GetStream(player);
+    outputstreamer_t streamer = SSB::GetStream(player);
     if (streamer) {
         int sndgrpid = streamer->sndgrpid;
         int samplerate = streamer->samplerate;
         int channels = streamer->channels;
         int framesize = streamer->framesize;
         
-        CloseOutputStream(player);
-        OpenOutputStream(player, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
-        StartStream(player); 
+        SSB::CloseOutputStream(player);
+        SSB::OpenOutputStream(player, DEFAULT_DEVICE_ID, sndgrpid, samplerate, channels, framesize);
+        
+        // Explicit call to base class StartStream to prevent Name Hiding error
+        SSB::StartStream(player); 
     }
 }
 
@@ -167,6 +167,7 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
 // INPUT STREAMER (Microphone)
 // ---------------------------------------------------------
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
+    // عدم استفاده از تخصیص حافظه (بدون resize) برای حفظ گارانتی Real-time
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
@@ -237,7 +238,7 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
         builder.setInputPreset(oboe::InputPreset::Unprocessed);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
-        MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Mic preset = Unprocessed, LowLatency, Exclusive\n"));
+        MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Unprocessed, LowLatency, Exclusive\n"));
     } else {
         builder.setInputPreset(oboe::InputPreset::Unprocessed);
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
@@ -282,7 +283,6 @@ bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
 }
 
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
-    std::lock_guard<std::recursive_mutex> g(CaptureLock());
     if (!streamer || !streamer->stream) return false;
 
     // خواندن داینامیک وضعیت ویژگی‌های درخواستی تیم‌تاک (AEC, AGC, NS)
@@ -337,7 +337,7 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     while (fifo_size < totalOutgoingSamples && more) {
         more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
         
-        // استفاده از اشاره‌گر خام جهت دوری از قفل‌های اتمیک Reference Counting کاندید بر روی ترد صوتی
+        // استفاده از اشاره‌گر خام جهت دوری از قفل‌های اتمیک Reference Counting
         OboeWrapper* sndSys = OboeWrapper::getInstance().get();
         if (sndSys) {
             int mastervol = sndSys->GetMasterVolume(sndgrpid);
@@ -386,6 +386,7 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     auto streamer = std::make_shared<OboeOutputStreamer>(player, sndgrpid, framesize, samplerate, channels, SOUND_API_OBOE_ANDROID, outputdeviceid);
 
+    // پیش‌تخصیص ظرفیت بدون resize در حین استریم
     streamer->cb_buffer.resize(framesize * channels);
     streamer->fifo_capacity = samplerate * channels * 2;
     streamer->fifo_buffer.resize(streamer->fifo_capacity, 0);
@@ -446,6 +447,7 @@ void OboeWrapper::CloseStream(outputstreamer_t streamer) {
         streamer->stream->requestStop();
         streamer->stream->close();
         streamer->stream.reset();
+        MYTRACE(ACE_TEXT("Closed Oboe playback stream\n"));
     }
 }
 
