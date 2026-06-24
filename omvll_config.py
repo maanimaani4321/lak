@@ -72,6 +72,8 @@ class MyConfig(omvll.ObfuscationConfig):
         return True if self.is_logic_code(mod) else False
 
     def obfuscate_string(self, mod, func, string: bytes):
+        if b"TT_SIG_PLACEHOLDER" in string:
+            return None 
         if mod and hasattr(mod, 'name') and mod.name is not None:
             path = mod.name.lower()
             if "signaturespace" in path:
