@@ -10,11 +10,11 @@ namespace teamtalk {
 struct KwsInternalState {
     std::recursive_mutex mutex;
     
-    // استفاده از اشاره‌گرهای امن و پایدار C-API به جای کلاس‌های واسط C++
+    // استفاده صریح از هدر پایدار C-API
     const SherpaOnnxVoiceActivityDetector* vad = nullptr;
     const SherpaOnnxKeywordSpotter* spotter = nullptr;
     const SherpaOnnxOnlineStream* stream = nullptr;
-    SherpaOnnxLinearResampler* resampler = nullptr;
+    const SherpaOnnxLinearResampler* resampler = nullptr;
     
     JavaVM* jvm = nullptr;
     jobject java_listener_ref = nullptr;
@@ -60,14 +60,15 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
     }
 
     try {
-        // ۱. ساخت پیکربندی و شیء VAD به صورت نیتیو
-        SherpaOnnxVoiceActivityDetectorConfig vad_config;
+        // ۱. مقداردهی اولیه VAD به کمک ساختارهای C-API
+        SherpaOnnxVadModelConfig vad_config;
         std::memset(&vad_config, 0, sizeof(vad_config));
         vad_config.silero_vad.model = vad_path.c_str();
         vad_config.silero_vad.threshold = 0.35f; 
         vad_config.silero_vad.min_silence_duration = 0.5f;
         vad_config.silero_vad.min_speech_duration = 0.10f; 
         vad_config.silero_vad.window_size = 512;
+        vad_config.silero_vad.max_speech_duration = 20.0f;
         vad_config.sample_rate = 16000;
         vad_config.num_threads = 1;
         vad_config.provider = "cpu";
@@ -75,7 +76,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
         g_state.vad = SherpaOnnxCreateVoiceActivityDetector(&vad_config, 10.0f);
         if (!g_state.vad) return false;
 
-        // ۲. ساخت پیکربندی و شیء Keyword Spotter به صورت نیتیو
+        // ۲. مقداردهی اولیه KeywordSpotter به کمک ساختارهای C-API
         SherpaOnnxKeywordSpotterConfig config;
         std::memset(&config, 0, sizeof(config));
         config.feat_config.sample_rate = 16000;
@@ -99,7 +100,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
             return false;
         }
 
-        // ۳. ساخت لوله مداوم صوتی بدون ریسک تخریب ناشی از چرخه عمر C++
+        // ۳. ساخت لوله صوتی پایدار مستقیم
         g_state.stream = SherpaOnnxCreateKeywordStream(g_state.spotter);
         if (!g_state.stream) {
             SherpaOnnxDestroyKeywordSpotter(g_state.spotter);
@@ -143,7 +144,7 @@ void KwsStop(JNIEnv* env) {
 
     g_state.active = false;
     
-    // آزادسازی صریح حافظه بر اساس اصول امن C-API
+    // مدیریت مستقیم و امن آزادسازی آدرس‌ها
     if (g_state.stream) {
         SherpaOnnxDestroyOnlineStream(g_state.stream);
         g_state.stream = nullptr;
@@ -208,7 +209,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             g_state.mono_buffer[i] = sum / (channels * 32768.0f);
         }
 
-        // بررسی و بازسازی LinearResampler به صورت نیتیو C-API
+        // بررسی و ساخت نمونه ریسمپلر به صورت نیتیو
         if (!g_state.resampler || g_state.current_samplerate != samplerate) {
             if (g_state.resampler) {
                 SherpaOnnxDestroyLinearResampler(g_state.resampler);
@@ -217,27 +218,23 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             g_state.current_samplerate = samplerate;
         }
 
-        float* resampled_output = nullptr;
-        int32_t resampled_size = 0;
-        
-        SherpaOnnxLinearResamplerResample(
+        // استفاده صحیح از ساختار خروجی SherpaOnnxResampleOut
+        const SherpaOnnxResampleOut* resampled_output = SherpaOnnxLinearResamplerResample(
             g_state.resampler,
             g_state.mono_buffer.data(),
             g_state.mono_buffer.size(),
-            0,
-            &resampled_output,
-            &resampled_size
+            0
         );
 
-        if (resampled_output && resampled_size > 0) {
-            SherpaOnnxVoiceActivityDetectorAcceptWaveform(g_state.vad, resampled_output, resampled_size);
+        if (resampled_output && resampled_output->samples && resampled_output->n > 0) {
+            SherpaOnnxVoiceActivityDetectorAcceptWaveform(g_state.vad, resampled_output->samples, resampled_output->n);
 
             while (SherpaOnnxVoiceActivityDetectorEmpty(g_state.vad) == 0) {
                 const SherpaOnnxSpeechSegment* segment = SherpaOnnxVoiceActivityDetectorFront(g_state.vad);
                 SherpaOnnxVoiceActivityDetectorPop(g_state.vad);
 
                 if (segment && segment->samples && segment->n > 0) {
-                    // تزریق پیوسته به لوله صوتی پایدار بدون هیچ باگ چرخه‌ی زندگی
+                    // تزریق پیوسته فریم‌ها به لوله صوتی پایدار C-API بدون باگ‌های تخریب کلاس‌های واسطه
                     SherpaOnnxOnlineStreamAcceptWaveform(g_state.stream, 16000, segment->samples, segment->n);
 
                     while (SherpaOnnxIsKeywordStreamReady(g_state.spotter, g_state.stream) == 1) {
@@ -272,4 +269,4 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
     }
 }
 
-}
+} // namespace teamtalk

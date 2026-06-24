@@ -15,7 +15,7 @@ bool KwsStart(JNIEnv* env, jobject jlistener,
               const std::string& tokens_path,
               const std::string& bpe_path,
               const std::string& keywords_path,
-              const std::string& vad_path); // اضافه شدن پارامتر مدل سبک VAD
+              const std::string& vad_path);
 
 void KwsStop(JNIEnv* env);
 
@@ -23,4 +23,4 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
 
 } // namespace teamtalk
 
-#endif 
+#endif // KWSMANAGER_H
