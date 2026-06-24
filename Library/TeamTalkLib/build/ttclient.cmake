@@ -70,6 +70,7 @@ set (TTCLIENT_HEADERS
 
 set ( TTCLIENT_SOURCES
   ${TEAMTALKLIB_ROOT}/teamtalk/SecurityCheck.cpp
+  ${TEAMTALKLIB_ROOT}/teamtalk/SignatureSpace.cpp
   ${TEAMTALKLIB_ROOT}/myace/MyACE.cpp
   ${TEAMTALKLIB_ROOT}/myace/MyINet.cpp
   ${TEAMTALKLIB_ROOT}/myace/TimerHandler.cpp
