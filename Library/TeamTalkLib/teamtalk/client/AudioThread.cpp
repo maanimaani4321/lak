@@ -553,6 +553,14 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     SOFTGAIN(audblock.input_buffer, audblock.input_samples,
              audblock.inputfmt.channels, m_gainlevel, GAIN_NORMAL);
 
+    if (m_force_mono && audblock.inputfmt.channels == 2) {
+        for (int i = 0; i < audblock.input_samples; i++) {
+            int mixed = (static_cast<int>(audblock.input_buffer[i * 2]) + static_cast<int>(audblock.input_buffer[i * 2 + 1])) / 2;
+            audblock.input_buffer[i * 2] = static_cast<short>(mixed);
+            audblock.input_buffer[i * 2 + 1] = static_cast<short>(mixed);
+        }
+    }
+
 #if defined(ENABLE_SPEEXDSP)
     PreprocessSpeex(audblock);
 #endif

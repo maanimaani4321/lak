@@ -4438,4 +4438,36 @@ TEAMTALKDLL_API TTBOOL TT_StartInternalVideoTransmission(IN TTInstance* lpTTInst
             inst->clientnode->FeedToInsertVideoFrame(lpData, nDataSize, nWidth, nHeight, nFourCC, bTopDown != 0);
         }
     }
+
+TEAMTALKDLL_API TTBOOL TT_SetForceMono(IN TTInstance* lpTTInstance, IN TTBOOL bEnable)
+{
+    clientnode_t clientnode;
+    GET_CLIENTNODE_RET(clientnode, lpTTInstance, FALSE);
+    return static_cast<TTBOOL>(clientnode->SetForceMono(bEnable != 0));
+}
+
+TEAMTALKDLL_API TTBOOL TT_GetForceMono(IN TTInstance* lpTTInstance)
+{
+    clientnode_t clientnode;
+    GET_CLIENTNODE_RET(clientnode, lpTTInstance, FALSE);
+    return static_cast<TTBOOL>(clientnode->GetForceMono());
+}
+
+TEAMTALKDLL_API TTBOOL TT_GetSoundInputFilter(IN TTInstance* lpTTInstance, OUT TTCHAR szFilter[TT_STRLEN])
+{
+    clientnode_t clientnode;
+    GET_CLIENTNODE_RET(clientnode, lpTTInstance, FALSE);
+
+    if (szFilter == nullptr)
+        return FALSE;
+
+    ACE_CString const filter = clientnode->GetSoundInputFilter();
+#if defined(UNICODE)
+    ACE_WString const filter_w = Utf8ToUnicode(filter.c_str());
+    ACE_OS::strsncpy(szFilter, filter_w.c_str(), TT_STRLEN);
+#else
+    ACE_OS::strsncpy(szFilter, filter.c_str(), TT_STRLEN);
+#endif
+    return TRUE;
+}
 }
