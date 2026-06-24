@@ -3659,6 +3659,73 @@ void ClientNode::CloseVideoCaptureSession()
     m_flags &= ~CLIENT_TX_VIDEOCAPTURE;
 }
 
+bool ClientNode::StartInternalVideoTransmission(const VideoCodec& codec, int width, int height, int fps)
+{
+    ASSERT_CLIENTNODE_LOCKED(this);
+
+    if((m_flags & CLIENT_TX_VIDEOCAPTURE) != 0u)
+        return false;
+
+    media::VideoFormat const cap_format(width, height, fps, 1, media::FOURCC_I420);
+
+    m_vidcap_thread.StopEncoder();
+
+    auto cb = [this](auto && PH1, auto && PH2, auto && PH3, auto && PH4, auto && PH5) {
+        return EncodedVideoCaptureFrame(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), std::forward<decltype(PH3)>(PH3), std::forward<decltype(PH4)>(PH4), std::forward<decltype(PH5)>(PH5));
+    };
+
+    if(!m_vidcap_thread.StartEncoder(cb, cap_format, codec, VIDEOCAPTURE_ENCODER_FRAMES_MAX))
+    {
+        CloseVideoCaptureSession();
+        return false;
+    }
+
+    GEN_NEXT_ID(m_vidcap_stream_id);
+    m_flags |= CLIENT_TX_VIDEOCAPTURE;
+    m_flags |= CLIENT_VIDEOCAPTURE_READY;
+
+    int bytes = sizeof(media::VideoFrame) + RGB32_BYTES(width, height);
+    bytes *= VIDEOCAPTURE_LOCAL_FRAMES_MAX;
+    m_local_vidcapframes.high_water_mark(bytes);
+    m_local_vidcapframes.low_water_mark(bytes);
+    m_local_vidcapframes.activate();
+
+    return true;
+}
+
+void ClientNode::StopInternalVideoTransmission()
+{
+    ASSERT_CLIENTNODE_LOCKED(this);
+    CloseVideoCaptureSession();
+    m_flags &= ~CLIENT_VIDEOCAPTURE_READY;
+}
+
+void ClientNode::FeedToInsertVideoFrame(const char* lpData, int nDataSize, int nWidth, int nHeight, int nFourCC, bool bTopDown)
+{
+    if ((m_flags & CLIENT_TX_VIDEOCAPTURE) == CLIENT_CLOSED)
+        return;
+
+    // کنترل هوشمند بافرینگ (Ring Buffer) جهت جلوگیری از سربار پردازنده و پرش تصویر
+    if (m_vidcap_thread.msg_queue()->message_count() >= VIDEOCAPTURE_ENCODER_FRAMES_MAX)
+    {
+        m_frames_dropped++;
+        return; 
+    }
+
+    media::VideoFrame video_frame;
+    video_frame.frame = const_cast<char*>(lpData);
+    video_frame.frame_length = nDataSize;
+    video_frame.width = nWidth;
+    video_frame.height = nHeight;
+    video_frame.fourcc = static_cast<media::FourCC>(nFourCC);
+    video_frame.top_down = bTopDown;
+    video_frame.key_frame = false;
+    video_frame.stream_id = m_vidcap_stream_id;
+    video_frame.timestamp = GETTIMESTAMP();
+
+    m_vidcap_thread.QueueFrame(video_frame);
+}
+
 ACE_Message_Block* ClientNode::AcquireVideoCaptureFrame()
 {
     ASSERT_CLIENTNODE_LOCKED(this);

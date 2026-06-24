@@ -4412,4 +4412,30 @@ extern "C" {
             inst->clientnode->FeedToInsertAudioBlock(lpData, nSamples, nGain, bForceTransmitCheck != 0);
         }
     }
+
+TEAMTALKDLL_API TTBOOL TT_StartInternalVideoTransmission(IN TTInstance* lpTTInstance, IN const VideoCodec* lpVideoCodec, int nWidth, int nHeight, int nFPS) {
+        auto inst = GetClient(lpTTInstance);
+        if (inst && inst->clientnode && lpVideoCodec) {
+            teamtalk::VideoCodec codec;
+            Convert(*lpVideoCodec, codec);
+            return static_cast<TTBOOL>(inst->clientnode->StartInternalVideoTransmission(codec, nWidth, nHeight, nFPS));
+        }
+        return FALSE;
+    }
+
+    TEAMTALKDLL_API TTBOOL TT_StopInternalVideoTransmission(IN TTInstance* lpTTInstance) {
+        auto inst = GetClient(lpTTInstance);
+        if (inst && inst->clientnode) {
+            inst->clientnode->StopInternalVideoTransmission();
+            return TRUE;
+        }
+        return FALSE;
+    }
+
+    TEAMTALKDLL_API void TT_PushInternalVideo(IN TTInstance* lpTTInstance, const char* lpData, int nDataSize, int nWidth, int nHeight, int nFourCC, TTBOOL bTopDown) {
+        auto inst = GetClient(lpTTInstance);
+        if (inst && inst->clientnode) {
+            inst->clientnode->FeedToInsertVideoFrame(lpData, nDataSize, nWidth, nHeight, nFourCC, bTopDown != 0);
+        }
+    }
 }

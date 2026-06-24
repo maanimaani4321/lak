@@ -534,6 +534,51 @@ extern "C" {
         env->ReleaseShortArrayElements(data, body, JNI_ABORT);
     }
     
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startInternalVideoTransmission(JNIEnv* env,
+                                                                                            jobject thiz,
+                                                                                            jobject lpVideoCodec,
+                                                                                            jint nWidth,
+                                                                                            jint nHeight,
+                                                                                            jint nFPS)
+    {
+        THROW_NULLEX(env, lpVideoCodec, false);
+
+        VideoCodec vidcodec = {};
+        setVideoCodec(env, vidcodec, lpVideoCodec, J2N);
+        return TT_StartInternalVideoTransmission(GetTTInstance(env, thiz), &vidcodec, nWidth, nHeight, nFPS);
+    }
+
+    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_stopInternalVideoTransmission(JNIEnv* env,
+                                                                                           jobject thiz)
+    {
+        return TT_StopInternalVideoTransmission(GetTTInstance(env, thiz));
+    }
+
+    JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalVideo(JNIEnv* env,
+                                                                           jobject thiz,
+                                                                           jbyteArray data,
+                                                                           jint data_size,
+                                                                           jint width,
+                                                                           jint height,
+                                                                           jint four_cc,
+                                                                           jboolean top_down)
+    {
+        THROW_NULLEX(env, data, );
+
+        TTInstance* inst = GetTTInstance(env, thiz);
+        if (inst == nullptr) return;
+
+        jsize arrayLen = env->GetArrayLength(data);
+        if (data_size > arrayLen) data_size = arrayLen;
+
+        jbyte* body = env->GetByteArrayElements(data, nullptr);
+        if (body == nullptr) return;
+
+        TT_PushInternalVideo(inst, reinterpret_cast<const char*>(body), (int)data_size, (int)width, (int)height, (int)four_cc, top_down ? JTRUE : JFALSE);
+
+        env->ReleaseByteArrayElements(data, body, JNI_ABORT);
+    }
+    
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setVoiceActivationLevel(JNIEnv* env,
                                                                                      jobject thiz,
                                                                                      jint nLevel)
