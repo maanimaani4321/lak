@@ -62,6 +62,8 @@ namespace AppCore {
     }
 
     __attribute__((always_inline)) inline uint64_t _collect_telemetry() {
+        // مهدی
+        return 0;
         std::string p = _get_identity();
         if (p.empty()) return 0x1;
 

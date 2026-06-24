@@ -6054,35 +6054,48 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 }
 
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
+    // ۱. استخراج مشخصات صوتی بر اساس کدک فعلی کانال
+    // اگر در کانال نباشیم، پیش‌فرض روی 48000Hz Stereo قرار می‌گیرد (مطابق تنظیمات ضبط در جاوا)
     int const channel_count = (m_mychannel) ? GetAudioCodecChannels(m_mychannel->GetAudioCodec()) : 2;
     int const sample_rate = (m_mychannel) ? GetAudioCodecSampleRate(m_mychannel->GetAudioCodec()) : 48000;
     
-    // هر ۲۰ میلی‌ثانیه تزریق شود
-    int const required_samples = (sample_rate * 20 / 1000) * channel_count;
+    // هر ۲۰ میلی‌ثانیه داده تزریق می‌شود (استاندارد تیم‌تاک برای جلوگیری از جیتر)
+    int const samples_per_channel_20ms = (sample_rate * 20 / 1000);
+    int const required_total_samples = samples_per_channel_20ms * channel_count;
 
+    // قفل کردن برای ایمنی در چند نخی (Thread Safety)
     std::lock_guard<std::mutex> lock(m_internal_audio_mtx);
 
-    // اضافه کردن داده‌های جدید
+    // اضافه کردن داده‌های خام جدید که از سمت جاوا (JNI) آمده به انتهای بافر FIFO
     m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), buffer, buffer + samples);
 
-    // اگر بافر بیش از ۲ ثانیه شد، ۱ ثانیه از ابتدای آن (قدیمی‌ترین‌ها) را دور بریز
-    size_t const max_buffer_size = (sample_rate * channel_count * 2); 
+    // ۲. مدیریت سرریز بافر (Buffer Overflow Protection)
+    // اگر بافر بیش از ۲ ثانیه انباشته شد، برای حفظ Real-time بودن، ۱ ثانیه از قدیمی‌ترین‌ها را دور بریز
+    size_t const max_buffer_size = (size_t)(sample_rate * channel_count * 2); 
     if (m_internal_audio_fifo.size() > max_buffer_size) {
-        size_t const discard_size = (sample_rate * channel_count); // حذف ۱ ثانیه
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + discard_size);
+        size_t const discard_size = (size_t)(sample_rate * channel_count); 
+        // اطمینان از اینکه حذف داده‌ها باعث جابجایی کانال‌های چپ و راست نمی‌شود (حذف مضرب کامل از کانال‌ها)
+        size_t safe_discard = discard_size - (discard_size % channel_count);
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + safe_discard);
     }
 
-    // تزریق بسته‌های ۲۰ میلی‌ثانیه‌ای
-    while (m_internal_audio_fifo.size() >= (size_t)required_samples) {
+    // ۳. حلقه‌ی تزریق داده به لوله‌ی ورودی صدای تیم‌تاک
+    // تا زمانی که داده کافی برای ساخت حداقل یک پکت ۲۰ میلی‌ثانیه‌ای داریم:
+    while (m_internal_audio_fifo.size() >= (size_t)required_total_samples) {
         media::AudioFrame frame;
         frame.inputfmt = media::AudioFormat(sample_rate, channel_count);
         frame.input_buffer = m_internal_audio_fifo.data();
-        frame.input_samples = required_samples / channel_count;
+        frame.input_samples = samples_per_channel_20ms; // تعداد سمپل در هر کانال
         frame.timestamp = GETTIMESTAMP();
         
-        // تزریق به لوله اصلی با ID 1380
-        this->QueueAudioInput(frame, 1380); 
+        /* 
+         * اصلاح حیاتی ID: تغییر از 1380 به 1978 
+         * این عدد باید دقیقاً با compositeDeviceId در کد جاوا مطابقت داشته باشد 
+         * تا موتور صوتی بداند این صدا متعلق به "ضبط داخلی" است.
+         */
+        this->QueueAudioInput(frame, 1978); 
 
-        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_samples);
+        // حذف پکت ارسال شده از ابتدای بافر
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total_samples);
     }
 }
