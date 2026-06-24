@@ -48,6 +48,9 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <string>
+struct AVFilterGraph;
+struct AVFilterContext;
 
 using audioencodercallback_t = std::function< void (const teamtalk::AudioCodec& codec,
                              const char* enc_data, int enc_len,
@@ -58,6 +61,7 @@ class AudioThread : protected ACE_Task<ACE_MT_SYNCH>
 {
 public:
     AudioThread();
+    void SetFFmpegFilter(const std::string& filter_str);
     ~AudioThread() override;
 
     bool StartEncoder(const audioencodercallback_t& callback,
@@ -93,6 +97,16 @@ private:
     int svc() override;
     void ProcessAudioFrame(media::AudioFrame& audblock);
     void MeasureVoiceLevel(const media::AudioFrame& audblock);
+    std::string m_ffmpeg_filter_str;
+    bool m_filter_changed = false;
+    
+    // FFmpeg Filter Graph
+    AVFilterGraph* m_filter_graph = nullptr;
+    AVFilterContext* m_buffersink_ctx = nullptr;
+    AVFilterContext* m_buffersrc_ctx = nullptr;
+    std::vector<short> m_filter_fifo; // بافر حلقوی برای مدیریت تغییر سایز فریم‌ها
+    bool InitFFmpegFilter(const media::AudioFormat& format);
+    void FreeFFmpegFilter();
 
     void MuteSound(bool leftchannel, bool rightchannel);
     bool UpdatePreprocess(const teamtalk::SpeexDSP& speexdsp);

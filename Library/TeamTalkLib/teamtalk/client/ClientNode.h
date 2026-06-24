@@ -180,6 +180,7 @@ namespace teamtalk {
     public:
         ClientNode(const ACE_TString& version, ClientListener* listener);
         ~ClientNode() override;
+        bool SetSoundInputFilter(const ACE_CString& filter_str);
 
 #if defined(_DEBUG)
         uint32_t m_active_timerid = 0;

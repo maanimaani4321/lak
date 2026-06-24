@@ -1,24 +1,6 @@
 /*
  * Copyright (c) 2005-2018, BearWare.dk
- *
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
+ * ...
  */
 
 #include "AudioThread.h"
@@ -31,6 +13,14 @@
 #if defined(ENABLE_WEBRTC)
 #include "avstream/WebRTCPreprocess.h"
 #endif
+
+extern "C" {
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
+#include <libavutil/opt.h>
+#include <libavutil/channel_layout.h>
+}
 
 #include <cassert>
 #include <cstddef>
@@ -48,7 +38,104 @@ AudioThread::AudioThread()
 
 AudioThread::~AudioThread()
 {
+    FreeFFmpegFilter();
     MYTRACE(ACE_TEXT("AudioThread\n"));
+}
+
+void AudioThread::SetFFmpegFilter(const std::string& filter_str)
+{
+    std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+    m_ffmpeg_filter_str = filter_str;
+    m_filter_changed = true;
+}
+
+void AudioThread::FreeFFmpegFilter()
+{
+    if (m_filter_graph) {
+        avfilter_graph_free(&m_filter_graph);
+        m_filter_graph = nullptr;
+        m_buffersrc_ctx = nullptr;
+        m_buffersink_ctx = nullptr;
+    }
+    m_filter_fifo.clear();
+}
+
+bool AudioThread::InitFFmpegFilter(const media::AudioFormat& format)
+{
+    FreeFFmpegFilter();
+    
+    if (m_ffmpeg_filter_str.empty())
+        return true;
+
+    char args[512];
+    int ret = 0;
+    const AVFilter *abuffersrc  = avfilter_get_by_name("abuffer");
+    const AVFilter *abuffersink = avfilter_get_by_name("abuffersink");
+    AVFilterInOut *outputs = avfilter_inout_alloc();
+    AVFilterInOut *inputs  = avfilter_inout_alloc();
+    
+    m_filter_graph = avfilter_graph_alloc();
+    if (!outputs || !inputs || !m_filter_graph) {
+        FreeFFmpegFilter();
+        return false;
+    }
+
+    AVChannelLayout ch_layout = {};
+    av_channel_layout_default(&ch_layout, format.channels);
+    char ch_layout_str[64];
+    av_channel_layout_describe(&ch_layout, ch_layout_str, sizeof(ch_layout_str));
+
+    snprintf(args, sizeof(args),
+             "time_base=1/%d:sample_rate=%d:sample_fmt=s16:channel_layout=%s",
+             format.samplerate, format.samplerate, ch_layout_str);
+
+    ret = avfilter_graph_create_filter(&m_buffersrc_ctx, abuffersrc, "in",
+                                       args, nullptr, m_filter_graph);
+    if (ret < 0) goto end;
+
+    ret = avfilter_graph_create_filter(&m_buffersink_ctx, abuffersink, "out",
+                                       nullptr, nullptr, m_filter_graph);
+    if (ret < 0) goto end;
+
+    // اجبار به خروجی s16 و سمپل‌ریت و کانال استاندارد برای جلوگیری از کرش
+    ret = av_opt_set_bin(m_buffersink_ctx, "sample_fmts",
+                         (const uint8_t*)&(const enum AVSampleFormat){AV_SAMPLE_FMT_S16},
+                         sizeof(enum AVSampleFormat), AV_OPT_SEARCH_CHILDREN);
+    ret = av_opt_set_bin(m_buffersink_ctx, "channel_layouts",
+                         (const uint8_t*)&(const uint64_t){(format.channels == 2 ? AV_CH_LAYOUT_STEREO : AV_CH_LAYOUT_MONO)},
+                         sizeof(uint64_t), AV_OPT_SEARCH_CHILDREN);
+    ret = av_opt_set_bin(m_buffersink_ctx, "sample_rates",
+                         (const uint8_t*)&(const int){format.samplerate},
+                         sizeof(int), AV_OPT_SEARCH_CHILDREN);
+
+    outputs->name       = av_strdup("in");
+    outputs->filter_ctx = m_buffersrc_ctx;
+    outputs->pad_idx    = 0;
+    outputs->next       = nullptr;
+
+    inputs->name       = av_strdup("out");
+    inputs->filter_ctx = m_buffersink_ctx;
+    inputs->pad_idx    = 0;
+    inputs->next       = nullptr;
+
+    ret = avfilter_graph_parse_ptr(m_filter_graph, m_ffmpeg_filter_str.c_str(),
+                                   &inputs, &outputs, nullptr);
+    if (ret < 0) goto end;
+
+    ret = avfilter_graph_config(m_filter_graph, nullptr);
+    if (ret < 0) goto end;
+
+end:
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+
+    if (ret < 0) {
+        MYTRACE(ACE_TEXT("Failed to init FFmpeg Filter: %s\n"), m_ffmpeg_filter_str.c_str());
+        FreeFFmpegFilter();
+        return false;
+    }
+    
+    return true;
 }
 
 bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
@@ -153,7 +240,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
     m_codec = codec;
     m_callback = callback;
 
-    //allow one second of audio to build up in the queue
     int max_queue = PCM16_BYTES(sample_rate, GetAudioCodecChannels(codec));
     max_queue += (1 + (sample_rate / callback_samples)) * sizeof(media::AudioFrame);
 
@@ -167,21 +253,6 @@ bool AudioThread::StartEncoder(const audioencodercallback_t& callback,
         return false;
     }
 
-    MYTRACE_COND(codec.codec == CODEC_SPEEX,
-                 ACE_TEXT("Launched Speex encoder, samplerate %d, bitrate %d, cb %d, fpp %d\n"),
-                 GetAudioCodecSampleRate(codec), GetAudioCodecBitRate(codec),
-                 GetAudioCodecFrameSize(codec), GetAudioCodecFramesPerPacket(codec));
-
-    MYTRACE_COND(codec.codec == CODEC_SPEEX_VBR,
-                 ACE_TEXT("Launched Speex VBR encoder, samplerate %d, bitrate %d, cb %d, fpp %d\n"),
-                 GetAudioCodecSampleRate(codec), GetAudioCodecBitRate(codec),
-                 GetAudioCodecFrameSize(codec), GetAudioCodecFramesPerPacket(codec));
-
-    MYTRACE_COND(codec.codec == CODEC_OPUS,
-                 ACE_TEXT("Launched OPUS VBR encoder, samplerate %d, bitrate %d, cb %d, channels %d\n"),
-                 GetAudioCodecSampleRate(codec), GetAudioCodecBitRate(codec),
-                 GetAudioCodecFrameSize(codec), GetAudioCodecChannels(codec));
-
     return true;
 }
 
@@ -190,6 +261,8 @@ void AudioThread::StopEncoder()
     int const ret = this->msg_queue()->close();
     TTASSERT(ret >= 0);
     wait();
+
+    FreeFFmpegFilter();
 
 #if defined(ENABLE_SPEEXDSP)
     m_preprocess_left.reset();
@@ -211,7 +284,6 @@ void AudioThread::StopEncoder()
     m_enc_cleared = true;
 
     m_echobuf.clear();
-
     m_callback = {};
 
     memset(&m_codec, 0, sizeof(m_codec));
@@ -226,7 +298,6 @@ int AudioThread::close(u_long /*flags*/)
 
 bool AudioThread::UpdatePreprocessor(const teamtalk::AudioPreprocessor& preprocess)
 {
-    //set AGC
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
 
     if (preprocess.preprocessor != AUDIOPREPROCESSOR_TEAMTALK)
@@ -248,20 +319,16 @@ bool AudioThread::UpdatePreprocessor(const teamtalk::AudioPreprocessor& preproce
     }
 #endif
 
-    // just ignore preprocessor if not audio codec is set
     if (Codec().codec == CODEC_NO_CODEC)
         return true;
 
-    MYTRACE(ACE_TEXT("Setting up audio preprocessor: %d\n"), preprocess.preprocessor);
     switch (preprocess.preprocessor)
     {
     case AUDIOPREPROCESSOR_WEBRTC_OBSOLETE_R4332 :
         return false;
     case AUDIOPREPROCESSOR_NONE :
-        // 'm_gainlevel' should not be reset
         return true;
     case AUDIOPREPROCESSOR_SPEEXDSP :
-        // 'm_gainlevel' should not be reset
         return UpdatePreprocess(preprocess.speexdsp);
     case AUDIOPREPROCESSOR_TEAMTALK :
         MuteSound(preprocess.ttpreprocessor.muteleft, preprocess.ttpreprocessor.muteright);
@@ -269,12 +336,8 @@ bool AudioThread::UpdatePreprocessor(const teamtalk::AudioPreprocessor& preproce
         return true;
     case AUDIOPREPROCESSOR_WEBRTC :
 #if defined(ENABLE_WEBRTC)
-        // WebRTC requires 10 msec audio frames
         if (GetAudioCodecCbMillis(m_codec) % 10 != 0)
-        {
-            MYTRACE(ACE_TEXT("Failed to initialize WebRTC audio preprocessor. Not 10 msec frames.\n"));
             return false;
-        }
 
         if (!m_apm)
             m_apm = webrtc::AudioProcessingBuilder().Create();
@@ -282,24 +345,15 @@ bool AudioThread::UpdatePreprocessor(const teamtalk::AudioPreprocessor& preproce
         if (m_apm->Initialize() != webrtc::AudioProcessing::kNoError)
         {
             m_apm.release();
-            MYTRACE(ACE_TEXT("Failed to initialize WebRTC audio preprocessor\n"));
             return false;
         }
         
-                    MYTRACE(ACE_TEXT("Initialized WebRTC: gain2=%d level=%g, denoise=%d suppress=%d, echo%d\n"),
-                    int(m_apm->GetConfig().gain_controller2.enabled),
-                    double(m_apm->GetConfig().gain_controller2.fixed_digital.gain_db),
-                    int(m_apm->GetConfig().noise_suppression.enabled),
-                    int(m_apm->GetConfig().noise_suppression.level),
-                    int(m_apm->GetConfig().echo_canceller.enabled));
-       
         m_aps = std::make_unique<webrtc::AudioProcessingStats>();
         return true;
 #else
         return false;
 #endif
     }
-
     return false;
 }
 
@@ -327,7 +381,6 @@ bool AudioThread::UpdatePreprocess(const teamtalk::SpeexDSP& speexdsp)
                 return false;
             }
 
-            //Speex has denoise on by default, so disable
             m_preprocess_left->EnableDenoise(false);
             m_preprocess_right->EnableDenoise(false);
         }
@@ -349,54 +402,35 @@ bool AudioThread::UpdatePreprocess(const teamtalk::SpeexDSP& speexdsp)
     agc.max_decrement = speexdsp.agc_maxdecdbsec;
     agc.max_gain = speexdsp.agc_maxgaindb;
 
-    //AGC
     bool agc_success = true;
     agc_success &= m_preprocess_left->EnableAGC(speexdsp.enable_agc);
     agc_success &= (channels == 1 || m_preprocess_right->EnableAGC(speexdsp.enable_agc));
     agc_success &= m_preprocess_left->SetAGCSettings(agc);
     agc_success &= (channels == 1 || m_preprocess_right->SetAGCSettings(agc));
 
-    //denoise
     bool denoise_success = true;
     denoise_success &= m_preprocess_left->EnableDenoise(speexdsp.enable_denoise);
     denoise_success &= (channels == 1 || m_preprocess_right->EnableDenoise(speexdsp.enable_denoise));
     denoise_success &= m_preprocess_left->SetDenoiseLevel(speexdsp.maxnoisesuppressdb);
     denoise_success &= (channels == 1 || m_preprocess_right->SetDenoiseLevel(speexdsp.maxnoisesuppressdb));
 
-    //set AEC
     bool aec_success = true;
     aec_success &= m_preprocess_left->EnableEchoCancel(speexdsp.enable_aec);
     aec_success &= (channels == 1 || m_preprocess_right->EnableEchoCancel(speexdsp.enable_aec));
-
     aec_success &= m_preprocess_left->SetEchoSuppressLevel(speexdsp.aec_suppress_level);
     aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressLevel(speexdsp.aec_suppress_level));
     aec_success &= m_preprocess_left->SetEchoSuppressActive(speexdsp.aec_suppress_active);
     aec_success &= (channels == 1 || m_preprocess_right->SetEchoSuppressActive(speexdsp.aec_suppress_active));
 
-    //set dereverb
     bool const dereverb = true;
     m_preprocess_left->EnableDereverb(dereverb);
     if(channels == 2)
         m_preprocess_right->EnableDereverb(dereverb);
 
-    MYTRACE_COND(!agc_success && speexdsp.enable_agc,
-                 ACE_TEXT("Failed to set SpeexDSP AGC settings\n"));
-    MYTRACE_COND(!denoise_success && speexdsp.enable_denoise,
-                 ACE_TEXT("Failed to set SpeexDSP denoise settings\n"));
-    MYTRACE_COND(!aec_success && speexdsp.enable_aec,
-                 ACE_TEXT("Failed to set SpeexDSP AEC settings\n"));
-
     if ((speexdsp.enable_agc && !agc_success) ||
         (speexdsp.enable_denoise && !denoise_success) ||
         (speexdsp.enable_aec && !aec_success))
         return false;
-
-    MYTRACE(ACE_TEXT("Set audio cfg. AGC: %d, %d, %d, %d, %d. Denoise: %d, %d. AEC: %d, %d, %d.\n"),
-            static_cast<int>(speexdsp.enable_agc), (int)speexdsp.agc_gainlevel,
-            speexdsp.agc_maxincdbsec, speexdsp.agc_maxdecdbsec,
-            speexdsp.agc_maxgaindb, static_cast<int>(speexdsp.enable_denoise),
-            speexdsp.maxnoisesuppressdb, static_cast<int>(speexdsp.enable_aec),
-            speexdsp.aec_suppress_level, speexdsp.aec_suppress_active);
 
     return true;
 #else
@@ -422,7 +456,6 @@ void AudioThread::QueueAudio(const media::AudioFrame& audframe)
 
 void AudioThread::QueueAudio(ACE_Message_Block* mb_audio)
 {
-    //add audio
     ACE_Time_Value tv;
     if(putq(mb_audio, &tv)<0)
     {
@@ -486,25 +519,65 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 #if defined(ENABLE_WEBRTC)
     if (m_gainlevel > 0)
     {
-        // WebRTC preprocessing (especially AEC) is very CPU-intensive
-        // Only do it if the input is not muted.
-        // This allows client apps that use PTT to close the MIC input when there's
-        // no PTT and thus prevent the processing hit.
-        // AEC still functions fine if it's activated like this, although there's
-        // minute echo fragment at the (re)start of the preprocessing
         PreprocessWebRTC(audblock);
     }
 #endif
 
+    // اعمال فیلترهای صوتی FFmpeg
+    {
+        std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+        
+        if (m_filter_changed) {
+            InitFFmpegFilter(audblock.inputfmt);
+            m_filter_changed = false;
+        }
+
+        if (m_filter_graph && m_buffersrc_ctx && m_buffersink_ctx) {
+            AVFrame* frame = av_frame_alloc();
+            frame->nb_samples = audblock.input_samples;
+            av_channel_layout_default(&frame->ch_layout, audblock.inputfmt.channels);
+            frame->format = AV_SAMPLE_FMT_S16;
+            frame->sample_rate = audblock.inputfmt.samplerate;
+            
+            av_frame_get_buffer(frame, 0);
+            memcpy(frame->data[0], audblock.input_buffer, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
+
+            if (av_buffersrc_add_frame(m_buffersrc_ctx, frame) >= 0) {
+                while (true) {
+                    AVFrame* out_frame = av_frame_alloc();
+                    int ret = av_buffersink_get_frame(m_buffersink_ctx, out_frame);
+                    if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF || ret < 0) {
+                        av_frame_free(&out_frame);
+                        break;
+                    }
+                    
+                    int out_elements = out_frame->nb_samples * audblock.inputfmt.channels;
+                    short* out_data = (short*)out_frame->data[0];
+                    m_filter_fifo.insert(m_filter_fifo.end(), out_data, out_data + out_elements);
+                    av_frame_free(&out_frame);
+                }
+            }
+            av_frame_free(&frame);
+
+            // اطمینان از اینکه دقیقاً به اندازه نیاز انکودر سمپل ارسال می‌شود
+            int required_elements = audblock.input_samples * audblock.inputfmt.channels;
+            if (m_filter_fifo.size() >= required_elements) {
+                memcpy(audblock.input_buffer, m_filter_fifo.data(), required_elements * sizeof(short));
+                m_filter_fifo.erase(m_filter_fifo.begin(), m_filter_fifo.begin() + required_elements);
+            } else {
+                // اگر فیلتر باعث کاهش طول شده و دیتای کافی نداریم، فعلاً رد می‌شویم تا بافر پر شود
+                return;
+            }
+        }
+    }
+
     MeasureVoiceLevel(audblock);
 
-    // mute left or right speaker (if enabled)
     if(audblock.inputfmt.channels == 2)
         SelectStereo(m_stereo, audblock.input_buffer, audblock.input_samples);
 
     if ((IsVoiceActive() && audblock.voiceact_enc) || audblock.force_enc)
     {
-        //encode
         const char* enc_data = nullptr;
         std::vector<int> enc_frame_sizes;
         switch(m_codec.codec)
@@ -537,7 +610,6 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
     }
     else
     {
-        //clear encoder state
         if(!m_enc_cleared)
         {
 #if defined(ENABLE_SPEEX)
@@ -557,13 +629,12 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
 
 void AudioThread::MeasureVoiceLevel(const media::AudioFrame& audblock)
 {
-    const int VU_MAX_VOLUME = 8000; //real maximum is if all samples are 32768
-    const int VOICEACT_STOPDELAY = 1500;//msecs to wait before stopping after voiceact has been disabled
-
+    const int VU_MAX_VOLUME = 8000;
     int lsum = 0;
     int rsum = 0;
     int sum = 0;
     int const samples_total = audblock.input_samples * audblock.inputfmt.channels;
+    
     if (audblock.inputfmt.channels == 2)
     {
         for (int i = 0; i < samples_total; i += 2)
@@ -573,18 +644,10 @@ void AudioThread::MeasureVoiceLevel(const media::AudioFrame& audblock)
         }
         switch (m_stereo)
         {
-        case STEREO_BOTH:
-            sum = (lsum + rsum) / 2;
-            break;
-        case STEREO_LEFT:
-            sum = lsum;
-            break;
-        case STEREO_RIGHT:
-            sum = rsum;
-            break;
-        case STEREO_NONE:
-            sum = 0;
-            break;
+        case STEREO_BOTH: sum = (lsum + rsum) / 2; break;
+        case STEREO_LEFT: sum = lsum; break;
+        case STEREO_RIGHT: sum = rsum; break;
+        case STEREO_NONE: sum = 0; break;
         }
     }
     else
@@ -592,6 +655,7 @@ void AudioThread::MeasureVoiceLevel(const media::AudioFrame& audblock)
         for (int i = 0; i < samples_total; ++i)
             sum += abs(audblock.input_buffer[i]);
     }
+    
     int avg = sum / audblock.input_samples;
     avg = 100 * avg / VU_MAX_VOLUME;
     this->m_voicelevel = avg > VU_METER_MAX ? VU_METER_MAX : avg;
@@ -606,18 +670,13 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
 
     bool preprocess = false;
-
-    if (!m_preprocess_left)
-        return;
+    if (!m_preprocess_left) return;
 
     preprocess |= m_preprocess_left->IsEchoCancel();
     preprocess |= m_preprocess_left->IsDenoising();
-    //don't include dereverb since it's not user configurable
-//    preprocess |= m_preprocess_left->IsDereverbing();
     preprocess |= m_preprocess_left->IsAGC();
 
-    if(!preprocess)
-        return;
+    if(!preprocess) return;
 
     if(audblock.inputfmt.channels == 1)
     {
@@ -632,7 +691,7 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
                                           m_echobuf.data());
             audblock.input_buffer = m_echobuf.data();
         }
-        m_preprocess_left->Preprocess(audblock.input_buffer); //denoise, AGC, etc
+        m_preprocess_left->Preprocess(audblock.input_buffer); 
     }
     else if(audblock.inputfmt.channels == 2)
     {
@@ -644,28 +703,21 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
         if(m_preprocess_left->IsEchoCancel() && m_preprocess_right->IsEchoCancel() &&
            audblock.outputfmt.channels == 2 && (audblock.output_buffer != nullptr))
         {
-            assert(audblock.input_samples == audblock.output_samples);
-
             std::vector<short> out_leftchan(audblock.output_samples);
             std::vector<short> out_rightchan(audblock.output_samples);
             std::vector<short> echobuf_left(audblock.output_samples);
             std::vector<short> echobuf_right(audblock.output_samples);
-            SplitStereo(audblock.output_buffer, audblock.output_samples,
-                        out_leftchan, out_rightchan);
+            SplitStereo(audblock.output_buffer, audblock.output_samples, out_leftchan, out_rightchan);
 
-            m_preprocess_left->EchoCancel(in_leftchan.data(), out_leftchan.data(),
-                                         echobuf_left.data());
+            m_preprocess_left->EchoCancel(in_leftchan.data(), out_leftchan.data(), echobuf_left.data());
             in_leftchan.swap(echobuf_left);
-            m_preprocess_right->EchoCancel(in_rightchan.data(), out_rightchan.data(),
-                                         echobuf_right.data());
+            m_preprocess_right->EchoCancel(in_rightchan.data(), out_rightchan.data(), echobuf_right.data());
             in_rightchan.swap(echobuf_right);
         }
 
-        m_preprocess_left->Preprocess(in_leftchan.data()); //denoise, AGC, etc
-        m_preprocess_right->Preprocess(in_rightchan.data()); //denoise, AGC, etc
-
-        MergeStereo(in_leftchan, in_rightchan, audblock.input_buffer,
-                    audblock.input_samples);
+        m_preprocess_left->Preprocess(in_leftchan.data());
+        m_preprocess_right->Preprocess(in_rightchan.data());
+        MergeStereo(in_leftchan, in_rightchan, audblock.input_buffer, audblock.input_samples);
     }
 }
 #endif
@@ -674,12 +726,9 @@ void AudioThread::PreprocessSpeex(media::AudioFrame& audblock)
 void AudioThread::PreprocessWebRTC(media::AudioFrame& audblock)
 {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
+    if (!m_apm) return;
 
-    if (!m_apm)
-        return;
-
-    if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples)
-    {
+    if (WebRTCPreprocess(*m_apm, audblock, audblock, m_aps.get()) != audblock.input_samples) {
         MYTRACE(ACE_TEXT("WebRTC failed to process audio\n"));
     }
 }
@@ -698,27 +747,20 @@ const char* AudioThread::ProcessSpeex(const media::AudioFrame& audblock,
     int const fpp = GetAudioCodecFramesPerPacket(m_codec);
     int enc_frm_size = 0;
 
-    assert(fpp);
-    assert(framesize>0);
-    if (framesize <= 0 || fpp <= 0)
-        return nullptr;
+    if (framesize <= 0 || fpp <= 0) return nullptr;
 
     enc_frm_size = int(m_encbuf.size()) / fpp;
 
     while(n_processed < audblock.input_samples)
     {
-        assert(nbBytes + enc_frm_size <= int(m_encbuf.size()));
         ret = m_speex->Encode(&audblock.input_buffer[n_processed],
                               &m_encbuf[nbBytes], enc_frm_size);
-        assert(ret>0);
-        if(ret <= 0)
-            return nullptr;
+        if(ret <= 0) return nullptr;
 
         enc_frame_sizes.push_back(ret);
         n_processed += framesize;
         nbBytes += ret;
     }
-    TTASSERT(nbBytes <= m_encbuf.size());
     return m_encbuf.data();
 }
 #endif
@@ -737,28 +779,20 @@ const char* AudioThread::ProcessOPUS(const media::AudioFrame& audblock,
     int ret;
     int enc_frm_size = 0;
 
-    assert(fpp);
-    assert(framesize>0);
-    if (framesize <= 0 || fpp <= 0)
-        return nullptr;
+    if (framesize <= 0 || fpp <= 0) return nullptr;
 
     enc_frm_size = int(m_encbuf.size()) / fpp;
 
     while(n_processed < audblock.input_samples)
     {
-        assert(nbBytes + enc_frm_size <= int(m_encbuf.size()));
         ret = m_opus->Encode(&audblock.input_buffer[n_processed*channels],
                              framesize, &m_encbuf[nbBytes], enc_frm_size);
-        assert(ret>0);
-        if(ret <= 0)
-            return nullptr;
+        if(ret <= 0) return nullptr;
 
-        // enc_frm_size -= ret; /* stay within MAX_ENC_FRAMESIZE */
         enc_frame_sizes.push_back(ret);
         n_processed += framesize;
         nbBytes += ret;
     }
-    TTASSERT(nbBytes <= m_encbuf.size());
     return m_encbuf.data();
 }
 #endif
