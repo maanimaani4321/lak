@@ -758,6 +758,7 @@ AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
                                       int out_samplerate,
                                       float speed)
 {
+    char atempo_str[256] = "";
     //init filters
     AVFilterGraph *filter_graph = nullptr;
 
@@ -887,7 +888,6 @@ AVFilterGraph* CreateAudioFilterGraph(AVFormatContext *fmt_ctx,
     inputs->filter_ctx = aud_buffersink_ctx;
     inputs->pad_idx    = 0;
     inputs->next       = nullptr;
-    char atempo_str[256] = "";
 
     if (speed != 1.0f && speed >= 0.5f) {
         if (speed <= 2.0f) {
