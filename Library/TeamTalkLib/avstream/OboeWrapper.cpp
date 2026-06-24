@@ -196,11 +196,11 @@ void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::R
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     bool useVoiceCom = (inputdeviceid & 0x10000) != 0;
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
-    bool hasSessionId = (inputdeviceid & 0x80000) != 0;
+    bool hasSessionId = (inputdeviceid & 0x80000000) != 0;
     int realDeviceId;
 if (hasSessionId) {
     // اگر سشن آیدی است، فقط فلگ را حذف کن و کل عدد را بردار (بدون ماسک 0x7FF)
-    realDeviceId = inputdeviceid & 0x7FFFF; 
+    realDeviceId = inputdeviceid & 0x7FFFFFFF;
 } else {
     // اگر میکروفون عادی است، از همان ماسک استاندارد استفاده کن
     realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
@@ -314,7 +314,7 @@ bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     if (!streamer || !streamer->stream) return false;
 
-    bool hasSessionId = (streamer->inputdeviceid & 0x80000) != 0;
+    bool hasSessionId = (streamer->inputdeviceid & 0x80000000) != 0;
     if (hasSessionId) {
         return true; // تنظیمات فیلتر را برای سشن آیدی نادیده بگیر
     }
@@ -419,7 +419,7 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     bool useVoiceCom = (outputdeviceid & 0x10000) != 0;
     bool forceStereo = (outputdeviceid & 0x20000) != 0;
-    bool hasSessionId = (outputdeviceid & 0x80000) != 0;
+    bool hasSessionId = (outputdeviceid & 0x80000000) != 0;
     int realDeviceId = outputdeviceid & SOUND_DEVICEID_MASK;
 
     // رفع باگ مونو/استریو:
