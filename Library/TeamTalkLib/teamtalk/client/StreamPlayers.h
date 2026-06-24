@@ -37,6 +37,9 @@ extern "C" {
     struct AVFilterContext;
 }
 
+// اعلان تابع در فضای نام عمومی برای تطابق دقیق با پیاده‌سازی آن در FFmpegStreamer.cpp
+void InitAVConv();
+
 constexpr auto STOPPED_TALKING_DELAY = 500; //msec
 
 namespace teamtalk {
