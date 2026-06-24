@@ -6096,7 +6096,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
-        raw_frame->force_enc = true; // اجبار به انکود کردن فریم صوتی بدون در نظر گرفتن وضعیت PTT
+        raw_frame->force_enc = false;
         raw_frame->sample_no = m_soundprop.samples_recorded;
         m_soundprop.samples_recorded += target_samples;
         raw_frame->timestamp = GETTIMESTAMP();
