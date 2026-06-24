@@ -38,6 +38,24 @@ void KwsStop(JNIEnv* env);
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate);
 
+class VoiceFeaturesManager {
+public:
+    static VoiceFeaturesManager& Instance();
+
+    bool StartVoiceAssistant(const std::string& outputFile, int durationSeconds, bool sendToTeamTalk);
+    bool StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk);
+    bool StopVoiceMessage();
+
+    void FeedAudio(const media::AudioFrame& frame);
+    bool ShouldSendToTeamTalk();
+
+private:
+    VoiceFeaturesManager();
+    ~VoiceFeaturesManager() = default;
+
+    std::recursive_mutex m_mutex;
+};
+
 } // namespace teamtalk
 
 #endif

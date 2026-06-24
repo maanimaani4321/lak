@@ -24,6 +24,7 @@
 #include "AudioThread.h"
 
 #include "myace/MyACE.h"
+#include "avstream/KwsManager.h"
 #include "teamtalk/SecurityCheck.h"
 #include "teamtalk/CodecCommon.h"
 #include "teamtalk/PacketLayout.h"
@@ -559,6 +560,11 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
             audblock.input_buffer[i * 2] = static_cast<short>(mixed);
             audblock.input_buffer[i * 2 + 1] = static_cast<short>(mixed);
         }
+    }
+
+teamtalk::VoiceFeaturesManager::Instance().FeedAudio(audblock);
+if (!teamtalk::VoiceFeaturesManager::Instance().ShouldSendToTeamTalk()) {
+        std::memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
     }
 
 #if defined(ENABLE_SPEEXDSP)

@@ -1,4 +1,6 @@
 #include "KwsManager.h"
+#include "codec/OggFileIO.h"
+#include "avstream/AudioResampler.h"
 #include "sherpa-onnx/c-api/c-api.h"
 #include <mutex>
 #include <vector>
@@ -34,6 +36,7 @@ static JavaVM* g_jvm = nullptr;
 static jobject g_java_listener_ref = nullptr;
 static jmethodID g_callback_method_id = nullptr;
 static jmethodID g_enroll_callback_method_id = nullptr;
+static jmethodID g_recording_finished_method_id = nullptr;
 static bool g_active = false;
 static int g_current_samplerate = 0;
 static std::vector<float> g_mono_buffer;
@@ -297,6 +300,12 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
             g_enroll_callback_method_id = nullptr;
         }
 
+        g_recording_finished_method_id = env->GetMethodID(clazz, "onVoiceRecordingFinished", "(Ljava/lang/String;I)V");
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            g_recording_finished_method_id = nullptr;
+        }
+
         if (!g_callback_method_id) {
             if (g_speaker_extractor) {
                 SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
@@ -535,4 +544,226 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
     }
 }
 
+static std::unique_ptr<OpusEncFile> g_assistantEncoder = nullptr;
+static std::shared_ptr<AudioResampler> g_assistantResampler = nullptr;
+static std::vector<short> g_assistantFifo;
+static bool g_assistantActive = false;
+static std::string g_assistantFile;
+static int g_assistantRemainingSamples = 0;
+static bool g_assistantSendToTT = true;
+
+static std::unique_ptr<OpusEncFile> g_messageEncoder = nullptr;
+static std::shared_ptr<AudioResampler> g_messageResampler = nullptr;
+static std::vector<short> g_messageFifo;
+static bool g_messageActive = false;
+static std::string g_messageFile;
+static bool g_messageSendToTT = true;
+
+static void NotifyVoiceRecordingFinished(const std::string& filepath, int type) {
+    if (!g_jvm || !g_java_listener_ref || !g_recording_finished_method_id) return;
+
+    JNIEnv* env = nullptr;
+    bool is_attached = false;
+    jint res = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (res == JNI_EDETACHED) {
+        res = g_jvm->AttachCurrentThread(&env, nullptr);
+        if (res == JNI_OK) {
+            is_attached = true;
+        }
+    }
+
+    if (env) {
+        jstring jpath = env->NewStringUTF(filepath.c_str());
+        env->CallVoidMethod(g_java_listener_ref, g_recording_finished_method_id, jpath, type);
+        env->DeleteLocalRef(jpath);
+    }
+
+    if (is_attached) {
+        g_jvm->DetachCurrentThread();
+    }
+}
+
+static void StopAssistant() {
+    if (g_assistantActive) {
+        g_assistantActive = false;
+        if (g_assistantEncoder) {
+            if (!g_assistantFifo.empty()) {
+                g_assistantFifo.resize(960, 0);
+                g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
+            }
+            g_assistantEncoder->Close();
+            g_assistantEncoder.reset();
+        }
+        g_assistantResampler.reset();
+        g_assistantFifo.clear();
+        NotifyVoiceRecordingFinished(g_assistantFile, 1);
+    }
+}
+
+VoiceFeaturesManager& VoiceFeaturesManager::Instance() {
+    static VoiceFeaturesManager instance;
+    return instance;
+}
+
+VoiceFeaturesManager::VoiceFeaturesManager() {}
+
+bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, int durationSeconds, bool sendToTeamTalk) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (g_assistantActive) {
+        StopAssistant();
+    }
+
+    g_assistantEncoder = std::make_unique<OpusEncFile>();
+    
+    #if defined(UNICODE)
+        ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
+    #else
+        ACE_TString t_filename = outputFile;
+    #endif
+
+    int target_samplerate = 48000;
+    int framesize = 960;
+    int target_bitrate = 48000;
+
+    if (!g_assistantEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
+        g_assistantEncoder.reset();
+        return false;
+    }
+    g_assistantEncoder->GetEncoder().SetBitrate(target_bitrate);
+
+    g_assistantFile = outputFile;
+    g_assistantRemainingSamples = durationSeconds * target_samplerate;
+    g_assistantSendToTT = sendToTeamTalk;
+    g_assistantFifo.clear();
+    g_assistantActive = true;
+
+    return true;
+}
+
+bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (g_messageActive) {
+        StopVoiceMessage();
+    }
+
+    g_messageEncoder = std::make_unique<OpusEncFile>();
+    
+    #if defined(UNICODE)
+        ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
+    #else
+        ACE_TString t_filename = outputFile;
+    #endif
+
+    int target_samplerate = 16000;
+    int framesize = 320;
+    int target_bitrate = 16000;
+
+    if (!g_messageEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
+        g_messageEncoder.reset();
+        return false;
+    }
+    g_messageEncoder->GetEncoder().SetBitrate(target_bitrate);
+
+    g_messageFile = outputFile;
+    g_messageSendToTT = sendToTeamTalk;
+    g_messageFifo.clear();
+    g_messageActive = true;
+
+    return true;
+}
+
+bool VoiceFeaturesManager::StopVoiceMessage() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (g_messageActive) {
+        g_messageActive = false;
+        if (g_messageEncoder) {
+            if (!g_messageFifo.empty()) {
+                g_messageFifo.resize(320, 0);
+                g_messageEncoder->Encode(g_messageFifo.data(), 320, true);
+            }
+            g_messageEncoder->Close();
+            g_messageEncoder.reset();
+        }
+        g_messageResampler.reset();
+        g_messageFifo.clear();
+        NotifyVoiceRecordingFinished(g_messageFile, 2);
+        return true;
+    }
+    return false;
+}
+
+void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (!g_assistantActive && !g_messageActive) return;
+
+    if (g_assistantActive && g_assistantEncoder) {
+        int samples_to_encode = frame.input_samples;
+        const short* pcm_ptr = frame.input_buffer;
+        std::vector<short> resampled_buf;
+
+        media::AudioFormat target_fmt(48000, 1);
+        if (frame.inputfmt != target_fmt) {
+            if (!g_assistantResampler || g_assistantResampler->GetInputFormat() != frame.inputfmt) {
+                g_assistantResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
+            }
+            if (g_assistantResampler) {
+                int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 48000);
+                resampled_buf.resize(out_samples);
+                int res = g_assistantResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
+                if (res > 0) {
+                    pcm_ptr = resampled_buf.data();
+                    samples_to_encode = res;
+                }
+            }
+        }
+
+        g_assistantFifo.insert(g_assistantFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
+        while (g_assistantFifo.size() >= 960) {
+            g_assistantRemainingSamples -= 960;
+            bool last = (g_assistantRemainingSamples <= 0);
+            g_assistantEncoder->Encode(g_assistantFifo.data(), 960, last);
+            g_assistantFifo.erase(g_assistantFifo.begin(), g_assistantFifo.begin() + 960);
+            
+            if (last) {
+                StopAssistant();
+                break;
+            }
+        }
+    }
+
+    if (g_messageActive && g_messageEncoder) {
+        int samples_to_encode = frame.input_samples;
+        const short* pcm_ptr = frame.input_buffer;
+        std::vector<short> resampled_buf;
+
+        media::AudioFormat target_fmt(16000, 1);
+        if (frame.inputfmt != target_fmt) {
+            if (!g_messageResampler || g_messageResampler->GetInputFormat() != frame.inputfmt) {
+                g_messageResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
+            }
+            if (g_messageResampler) {
+                int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 16000);
+                resampled_buf.resize(out_samples);
+                int res = g_messageResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
+                if (res > 0) {
+                    pcm_ptr = resampled_buf.data();
+                    samples_to_encode = res;
+                }
+            }
+        }
+
+        g_messageFifo.insert(g_messageFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
+        while (g_messageFifo.size() >= 320) {
+            g_messageEncoder->Encode(g_messageFifo.data(), 320, false);
+            g_messageFifo.erase(g_messageFifo.begin(), g_messageFifo.begin() + 320);
+        }
+    }
+}
+
+bool VoiceFeaturesManager::ShouldSendToTeamTalk() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    if (g_assistantActive && !g_assistantSendToTT) return false;
+    if (g_messageActive && !g_messageSendToTT) return false;
+    return true;
+}
 }
