@@ -33,19 +33,26 @@ if (FEATURE_PORTAUDIO)
 
 endif()
 
-# Android sound system
-if (FEATURE_OPENSLES)
+# Android sound system (Oboe)
+if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
+
+  include(FetchContent)
+  FetchContent_Declare(
+      oboe
+      GIT_REPOSITORY https://github.com/google/oboe.git
+      GIT_TAG 1.8.1
+  )
+  FetchContent_MakeAvailable(oboe)
 
   list (APPEND SOUNDSYS_HEADERS ${SOUNDSYS_HEADERS}
-    ${TEAMTALKLIB_ROOT}/avstream/OpenSLESWrapper.h)
+    ${TEAMTALKLIB_ROOT}/avstream/OboeWrapper.h)
 
   list (APPEND SOUNDSYS_SOURCES ${SOUNDSYS_SOURCES}
-    ${TEAMTALKLIB_ROOT}/avstream/OpenSLESWrapper.cpp)
+    ${TEAMTALKLIB_ROOT}/avstream/OboeWrapper.cpp)
 
-  set (SOUNDSYS_COMPILE_FLAGS -DENABLE_OPENSLES)
+  set (SOUNDSYS_COMPILE_FLAGS -DENABLE_OBOE)
 
-  find_library (OPENSLES_LIBRARY OpenSLES)
-  list (APPEND SOUNDSYS_LINK_FLAGS ${OPENSLES_LIBRARY})
+  list (APPEND SOUNDSYS_LINK_FLAGS oboe::oboe log OpenSLES)
 endif()
 
 # iOS sound system
