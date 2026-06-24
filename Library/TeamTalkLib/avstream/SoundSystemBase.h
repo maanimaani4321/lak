@@ -1113,7 +1113,11 @@ namespace soundsystem {
         {
             std::lock_guard<std::recursive_mutex> g(m_devs_lock);
 
-            int real_id = id & SOUND_DEVICEID_MASK;
+            int real_id;
+if (id & 0x80000000)
+    real_id = id;
+else
+    real_id = id & SOUND_DEVICEID_MASK;
 
             auto ii = m_sounddevs.find(real_id);
             if(ii != m_sounddevs.end())
