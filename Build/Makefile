@@ -31,12 +31,14 @@ android-build:
 		exit 1; \
 	fi; \
 	$(MAKE) CONFIGTYPE=$(CONFIGTYPE) \
-        CMAKE_EXTRA+="-DCMAKE_TOOLCHAIN_FILE=$(ANDROID_NDK_HOME)/build/cmake/android.toolchain.cmake \
+        CMAKE_EXTRA="-DCMAKE_TOOLCHAIN_FILE=$(ANDROID_NDK_HOME)/build/cmake/android.toolchain.cmake \
+        -DCMAKE_CXX_FLAGS='-fvisibility=hidden -fvisibility-inlines-hidden -O3 -flto -mllvm -split-basic-blocks -mllvm -sub -mllvm -sub_loop=3 -mllvm -fla' \
+        -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DANDROID_ABI=$(ANDROID_ABI) \
         -DANDROID_PLATFORM=android-21 \
         -DBUILD_TEAMTALK_LIBRARY_LIB=ON \
-        -DBUILD_TEAMTALK_LIBRARY_LIBPRO=ON \
+        -DBUILD_TEAMTALK_LIBRARY_LIBPRO=OFF \
         -DBUILD_TEAMTALK_CLIENTS=OFF \
         -DBUILD_TEAMTALK_SERVERS=OFF \
         -DBUILD_TEAMTALK_SERVER_SRVEXE=OFF \
