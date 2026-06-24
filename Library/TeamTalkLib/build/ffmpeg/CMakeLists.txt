@@ -114,7 +114,7 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavfilter.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavformat.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavcodec.a
-      ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libswresample.a
+      ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/swresample.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libswscale.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/lib/libavutil.a
       ${TOOLCHAIN_INSTALL_PREFIX_FFMPEG}/include/ffmpeg/libavformat/version.h)
@@ -212,7 +212,7 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "iOS")
 
   if (TOOLCHAIN_BUILD_EXTERNALPROJECTS)
     ExternalProject_Add(gas-preprocessor
-      GIT_REPOSITORY    https://github.com/FFmpeg/gas-preprocessor.git
+      GIT_REPOSITORY    https://github.com/FFmpeg/FFmpeg.git
       GIT_TAG           ac18363
       UPDATE_COMMAND    ""
       PREFIX            ${TOOLCHAIN_BUILD_PREFIX}/gas-preprocessor
@@ -276,12 +276,12 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "iOS")
       BUILD_COMMAND     make ${TOOLCHAIN_BUILD_MAKEJOBS}
       INSTALL_COMMAND   make ${TOOLCHAIN_BUILD_MAKEJOBS} install
       BUILD_BYPRODUCTS  <INSTALL_DIR>/lib/libavdevice.a
-      <INSTALL_DIR>/lib/libavfilter.a
-      <INSTALL_DIR>/lib/libavformat.a
-      <INSTALL_DIR>/lib/libavcodec.a
-      <INSTALL_DIR>/lib/libswresample.a
-      <INSTALL_DIR>/lib/libswscale.a
-      <INSTALL_DIR>/lib/libavutil.a
+                        <INSTALL_DIR>/lib/libavfilter.a
+                        <INSTALL_DIR>/lib/libavformat.a
+                        <INSTALL_DIR>/lib/libavcodec.a
+                        <INSTALL_DIR>/lib/libswresample.a
+                        <INSTALL_DIR>/lib/libswscale.a
+                        <INSTALL_DIR>/lib/libavutil.a
       DEPENDS openssl-src gas-preprocessor
       )
     ExternalProject_Get_Property(ffmpeg-src INSTALL_DIR)
@@ -375,12 +375,12 @@ elseif (MSVC)
       INSTALL_COMMAND   ""
       BUILD_IN_SOURCE   TRUE
       BUILD_BYPRODUCTS  <INSTALL_DIR>/lib/avdevice.lib
-      <INSTALL_DIR>/lib/avfilter.lib
-      <INSTALL_DIR>/lib/avformat.lib
-      <INSTALL_DIR>/lib/avcodec.lib
-      <INSTALL_DIR>/lib/swresample.lib
-      <INSTALL_DIR>/lib/swscale.lib
-      <INSTALL_DIR>/lib/avutil.lib
+                        <INSTALL_DIR>/lib/avfilter.lib
+                        <INSTALL_DIR>/lib/avformat.lib
+                        <INSTALL_DIR>/lib/avcodec.lib
+                        <INSTALL_DIR>/lib/swresample.lib
+                        <INSTALL_DIR>/lib/swscale.lib
+                        <INSTALL_DIR>/lib/avutil.lib
       DEPENDS           ${NASM_TARGET}
       )
     ExternalProject_Get_Property(ffmpeg-src INSTALL_DIR)
@@ -470,15 +470,6 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
       # Compile options
       --disable-debug
       --enable-pic
-      BUILD_COMMAND     make ${TOOLCHAIN_BUILD_MAKEJOBS}
-      INSTALL_COMMAND   make ${TOOLCHAIN_BUILD_MAKEJOBS} install
-      BUILD_BYPRODUCTS  <INSTALL_DIR>/lib/libavdevice.a
-      <INSTALL_DIR>/lib/libavfilter.a
-      <INSTALL_DIR>/lib/libavformat.a
-      <INSTALL_DIR>/lib/libavcodec.a
-      <INSTALL_DIR>/lib/libswresample.a
-      <INSTALL_DIR>/lib/libswscale.a
-      <INSTALL_DIR>/lib/libavutil.a
       )
     ExternalProject_Get_Property(ffmpeg-src INSTALL_DIR)
     file(MAKE_DIRECTORY ${INSTALL_DIR}/include)
@@ -587,15 +578,8 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Android")
       --disable-debug
       --enable-pic
       --enable-cross-compile --sysroot=${CMAKE_SYSROOT} --target-os=android
-      BUILD_COMMAND     ${FFMPEG_EXPORT} && make ${TOOLCHAIN_BUILD_MAKEJOBS}
-      INSTALL_COMMAND   ${FFMPEG_EXPORT} && make ${TOOLCHAIN_BUILD_MAKEJOBS} install
-      BUILD_BYPRODUCTS  <INSTALL_DIR>/lib/libavdevice.a
-      <INSTALL_DIR>/lib/libavfilter.a
-      <INSTALL_DIR>/lib/libavformat.a
-      <INSTALL_DIR>/lib/libavcodec.a
-      <INSTALL_DIR>/lib/libswresample.a
-      <INSTALL_DIR>/lib/libswscale.a
-      <INSTALL_DIR>/lib/libavutil.a
+      --pkg-config-flags="--static"
+      --extra-libs="-ldl"
       DEPENDS openssl-src
       )
     ExternalProject_Get_Property(ffmpeg-src INSTALL_DIR)
