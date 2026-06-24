@@ -8,6 +8,7 @@ class MyConfig(omvll.ObfuscationConfig):
         self.target_functions = [
             "connect",
             "initsoundinputdevice",
+            "setvoicegainlevel",
             "processaudioframe",
             "savefile"
         ]
