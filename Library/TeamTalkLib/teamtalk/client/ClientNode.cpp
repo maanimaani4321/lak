@@ -3133,7 +3133,7 @@ int ClientNode::GetVoiceGainLevel()
 bool ClientNode::SetSoundInputFilter(const ACE_CString& filter_str)
 {
     rguard_t const g_snd(LockSndprop());
-    m_voice_thread.SetFFmpegFilter(filter_str);
+    m_voice_thread.SetFFmpegFilter(filter_str.c_str()); 
     return true;
 }
 
