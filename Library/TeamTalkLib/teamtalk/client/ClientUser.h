@@ -1,26 +1,3 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- *
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
 #if !defined(CLIENTUSER_H)
 #define CLIENTUSER_H
 
@@ -219,6 +196,7 @@ namespace teamtalk {
         std::list< desktopinput_pkt_t >& GetDesktopInputRtxQueue() { return m_desktop_input_rtx; }
         void ResetDesktopInputTx();
 
+        void SetUserSoundFilter(const std::string& filter_str);
         void SetLocalSubscriptions(Subscriptions mask);
         Subscriptions GetLocalSubscriptions() const { return m_localsubscriptions; }
         void SetPeerSubscriptions(Subscriptions mask){ m_peersubscriptions = mask; }
@@ -318,6 +296,7 @@ namespace teamtalk {
 
         Subscriptions m_localsubscriptions = SUBSCRIBE_NONE, m_peersubscriptions = SUBSCRIBE_NONE;
 
+        std::string m_ffmpeg_filter_str;
         //audio storage
         ACE_TString m_audiofolder;
         ACE_TString m_vlog_vars;

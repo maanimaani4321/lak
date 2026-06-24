@@ -1,26 +1,3 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- * 
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
 #ifndef STREAMPLAYERS_H
 #define STREAMPLAYERS_H
 
@@ -51,6 +28,8 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include <mutex>
+#include <string>
 
 constexpr auto STOPPED_TALKING_DELAY = 500; //msec
 
@@ -111,9 +90,21 @@ namespace teamtalk {
         int GetNumAudioPacketsRecv(bool reset);
         int GetNumAudioPacketsLost(bool reset);
 
+        void SetFFmpegFilter(const std::string& filter_str);
         const AudioCodec& GetAudioCodec() const { return m_codec; }
 
     protected:
+        std::recursive_mutex m_preprocess_lock;
+        std::string m_ffmpeg_filter_str;
+        bool m_filter_changed = false;
+        struct AVFilterGraph* m_filter_graph = nullptr;
+        struct AVFilterContext* m_buffersink_ctx = nullptr;
+        struct AVFilterContext* m_buffersrc_ctx = nullptr;
+        std::vector<short> m_filter_fifo;
+
+        bool InitFFmpegFilter(int samplerate, int channels);
+        void FreeFFmpegFilter();
+
         void CleanUpAudioFragments(uint16_t too_old_packet_no);
 
         void AddPacket(const AudioPacket& packet);

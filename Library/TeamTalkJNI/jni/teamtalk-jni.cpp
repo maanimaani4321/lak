@@ -16,6 +16,7 @@ extern "C" void TT_PushInternalVideo(TTInstance* lpTTInstance, const char* lpDat
 extern "C" TTBOOL TT_SetForceMono(TTInstance* lpTTInstance, TTBOOL bEnable);
 extern "C" TTBOOL TT_GetForceMono(TTInstance* lpTTInstance);
 extern "C" TTBOOL TT_GetSoundInputFilter(TTInstance* lpTTInstance, TTCHAR szFilter[TT_STRLEN]);
+extern "C" TTBOOL TT_SetUserSoundFilter(TTInstance* lpTTInstance, int nUserID, const TTCHAR* lpFilter);
 
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
@@ -2161,6 +2162,21 @@ extern "C" {
     }
 
 //TODO: TT_HotKey_*
+
+JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setUserSoundFilter(JNIEnv* env,
+                                                                                   jobject thiz,
+                                                                                   jint nUserID,
+                                                                                   jstring filter)
+    {
+        TTInstance* ttInst = GetTTInstance(env, thiz);
+        if (!ttInst)
+            return JNI_FALSE;
+
+        if (filter == NULL)
+            return TT_SetUserSoundFilter(ttInst, nUserID, "");
+
+        return TT_SetUserSoundFilter(ttInst, nUserID, ttstr(env, filter));
+    }
 
 JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setSoundInputFilter(JNIEnv* env,
                                                                                 jobject thiz,
