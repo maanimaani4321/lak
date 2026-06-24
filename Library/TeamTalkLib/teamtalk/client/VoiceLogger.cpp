@@ -134,7 +134,7 @@ VoiceLog::VoiceLog(int userid, const ACE_TString& filename,
 #elif defined(ENABLE_LAME)
     {
         int mp3bitrate = AFFToMP3Bitrate(aff);
-        m_lameencoder = LameEncoder::CreateMP3(media::AudioFormat(samplerate, channels), mp3bitrate, filename);
+        m_lameencoder = teamtalk::LameEncoder::CreateMP3(media::AudioFormat(samplerate, channels), mp3bitrate, filename);
         if (!m_lameencoder)
         {
             ACE_TString error = ACE_TEXT("Failed to open file ") + filename;
