@@ -52,7 +52,7 @@ if (${CMAKE_SYSTEM_NAME} MATCHES "Android")
 
   set (SOUNDSYS_COMPILE_FLAGS -DENABLE_OBOE)
 
-  list (APPEND SOUNDSYS_LINK_FLAGS oboe::oboe log OpenSLES)
+  list (APPEND SOUNDSYS_LINK_FLAGS oboe log OpenSLES)
 endif()
 
 # iOS sound system
