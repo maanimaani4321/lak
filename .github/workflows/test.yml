@@ -1,0 +1,100 @@
+name: Android v8 Secure (No Pro)
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout_code
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: install_dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full zip pkg-config wget python3 python3-pip
+          pip3 install pyelftools --break-system-packages
+
+      - name: setup_ndk
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+
+      # مرحله بررسی و دانلود فایل زیپ طبیعی از Release
+      - name: Check and Download Prebuilt Dependencies
+        id: check_prebuilt
+        run: |
+          # ساخت مسیر درختی طبیعی پروژه قبل از آنزیپ
+          mkdir -p Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build
+          
+          # تلاش برای دانلود فایل زیپ از ریلیز با تگ prebuilts
+          if gh release download prebuilts -p "dependencies-arm64-v8a.zip" -D . --clobber 2>/dev/null; then
+            echo "Prebuilt dependencies ZIP found in Releases! Extracting to natural directory..."
+            # استخراج فایل زیپ دقیقاً در همان مسیر پیش‌فرض ساختار بیلد پروژه
+            unzip -q dependencies-arm64-v8a.zip -d Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/
+            echo "has_prebuilt=true" >> $GITHUB_OUTPUT
+          else
+            echo "No prebuilt dependencies ZIP found in Releases. Will compile from scratch."
+            echo "has_prebuilt=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # اجرای بیلد طبیعی بدون تغییر مسیرها
+      - name: build_sdk_v8
+        working-directory: ${{github.workspace}}/Build
+        run: |
+          if [ "${{ steps.check_prebuilt.outputs.has_prebuilt }}" = "true" ]; then
+            echo "Natural prebuilts found! Skipping external build to save time."
+            # بیلد فقط با گزینه OFF کردن پروژه‌های خارجی (بدون تغییر مسیر پیش‌فرض)
+            make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=OFF" android-arm64-v8a
+          else
+            echo "No prebuilts found. Starting natural compile from scratch..."
+            make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=ON" android-arm64-v8a
+            
+            # پس از اتمام موفق بیلد طبیعی، پوشه پیش‌فرض install را زیپ می‌کنیم
+            echo "Compiling finished. Packaging the natural install folder..."
+            cd build-release-android-arm64-v8a/Library/TeamTalkLib/build/
+            zip -r ../../../../../dependencies-arm64-v8a.zip install
+          fi
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      # اگر در مرحله قبل بیلد کامل انجام شده باشد، فایل زیپ جدید را در Releases آپلود خودکار می‌کند
+      - name: Upload to GitHub Releases (For automated cache)
+        if: steps.check_prebuilt.outputs.has_prebuilt != 'true'
+        run: |
+          echo "Uploading prebuilt package to GitHub Releases..."
+          gh release upload prebuilts dependencies-arm64-v8a.zip --clobber || \
+          gh release create prebuilts dependencies-arm64-v8a.zip --title "Prebuilt Toolchain Dependencies" --notes "Automated prebuilt packages for TeamTalk dependencies"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # فایل‌های حاصل را هم به صورت فایل زیپ در تب Artifacts قرار می‌دهد تا بتوانید دستی دانلود کنید
+      - name: Upload Dependency ZIP to Actions Artifacts (For manual download)
+        if: steps.check_prebuilt.outputs.has_prebuilt != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: prebuilt-dependencies-android-arm64-v8a
+          path: dependencies-arm64-v8a.zip
+
+      - name: export_artifacts
+        if: always()
+        run: |
+          mkdir -p final_output/binaries
+          find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
+          
+          mkdir -p final_output/teamtalk_headers
+          find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
+
+      - name: upload_results
+        uses: actions/upload-artifact@v4
+        with:
+          name: TeamTalk-v8-Offline-Package
+          path: final_output/
