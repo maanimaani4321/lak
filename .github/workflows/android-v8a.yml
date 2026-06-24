@@ -1,4 +1,4 @@
-name: Android v8
+name: Android v8 Optimized
 
 on:
   push:
@@ -9,22 +9,6 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     steps:
-      - name: disk_cleanup
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache
-          sudo docker image prune --all --force
-          sudo apt-get clean
-
-      - name: check_disk_space
-        run: |
-          echo "============================================"
-          echo "CURRENT DISK USAGE:"
-          df -h | grep '^/dev/'
-          echo "============================================"
-
       - name: checkout_code
         uses: actions/checkout@v4
         with:
@@ -44,24 +28,31 @@ jobs:
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-v8" android-arm64-v8a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: export_artifacts
         if: always()
         run: |
-          mkdir -p output_v8/libs
-          mkdir -p output_v8/headers
+          mkdir -p final_output/binaries
+          mkdir -p final_output/dependencies
           
-          cp Library/TeamTalk_DLL/arm64-v8a/libTeamTalk5.so output_v8/libs/ || true
+          find . -name "libTeamTalk5*.so" ! -name "*pro*" -exec cp {} final_output/binaries/ \; || true
           
-          cp -r Build/build-release-android-arm64-v8a/install output_v8/ || true
-          
-          find Library/ -name "*.h" -exec cp --parents {} output_v8/headers/ \; || true
+          if [ -d "${{runner.workspace}}/install-v8" ]; then
+            cp -r ${{runner.workspace}}/install-v8/* final_output/dependencies/
+          else
+            echo "Warning: Install directory not found at standard location, searching..."
+            INSTALL_PATH=$(find . -name "libACE.a" | sed 's|/ace/lib/libACE.a||' | head -n 1)
+            if [ -n "$INSTALL_PATH" ]; then cp -r $INSTALL_PATH/* final_output/dependencies/; fi
+          fi
+
+          mkdir -p final_output/teamtalk_headers
+          find Library/ -name "*.h" -exec cp --parents {} final_output/teamtalk_headers/ \; || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
         with:
-          name: TeamTalk-v8-SDK
-          path: output_v8/
+          name: TeamTalk-v8-Offline-Package
+          path: final_output/
