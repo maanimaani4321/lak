@@ -229,13 +229,13 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
         builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
         MYTRACE(ACE_TEXT("Oboe Input (VoiceCom 1): Mic preset = VoiceCommunication\n"));
     } else if (inputdeviceid == GENERIC_PROCESSED_DEVICE_ID) {
-        builder.setInputPreset(oboe::InputPreset::Unprocessed);
-        builder.setPerformanceMode(oboe::PerformanceMode::LowLatency);
+        builder.setInputPreset(oboe::InputPreset::Camcorder);
+        builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setSharingMode(oboe::SharingMode::Exclusive);
         MYTRACE(ACE_TEXT("Oboe Input (NoDelay 1380): Unprocessed, LowLatency, Exclusive\n"));
     } else {
-        builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
-        builder.setPerformanceMode(oboe::PerformanceMode::None); // غیرفعال کردن اجبار برای تاخیر کم
+        builder.setInputPreset(oboe::InputPreset::Camcorder);
+        builder.setPerformanceMode(oboe::PerformanceMode::None);
         builder.setDeviceId(inputdeviceid);
     }
 
