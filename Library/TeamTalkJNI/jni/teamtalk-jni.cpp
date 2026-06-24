@@ -560,122 +560,133 @@ extern "C" {
     }
     
     JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_pushInternalVideoYUV(
-        JNIEnv* env,
-        jobject thiz,
-        jobject y_buf,
-        jobject u_buf,
-        jobject v_buf,
-        jint y_stride,
-        jint u_stride,
-        jint v_stride,
-        jint u_pix_stride,
-        jint v_pix_stride,
-        jint width,
-        jint height,
-        jint rotation) 
-    {
-        THROW_NULLEX(env, y_buf, );
-        THROW_NULLEX(env, u_buf, );
-        THROW_NULLEX(env, v_buf, );
+    JNIEnv* env,
+    jobject thiz,
+    jobject y_buf,
+    jobject u_buf,
+    jobject v_buf,
+    jint y_stride,
+    jint u_stride,
+    jint v_stride,
+    jint u_pix_stride,
+    jint v_pix_stride,
+    jint width,
+    jint height,
+    jint rotation) 
+{
+    THROW_NULLEX(env, y_buf, );
+    THROW_NULLEX(env, u_buf, );
+    THROW_NULLEX(env, v_buf, );
 
-        uint8_t* y_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(y_buf));
-        uint8_t* u_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(u_buf));
-        uint8_t* v_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(v_buf));
+    // دریافت متد position از کلاس پایه java/nio/Buffer برای به دست آوردن آفست واقعی
+    jclass bufferClass = env->FindClass("java/nio/Buffer");
+    if (bufferClass == nullptr) return;
+    
+    jmethodID positionMethod = env->GetMethodID(bufferClass, "position", "()I");
+    if (positionMethod == nullptr) return;
 
-        if (!y_data || !u_data || !v_data) return;
+    jint y_pos = env->CallIntMethod(y_buf, positionMethod);
+    jint u_pos = env->CallIntMethod(u_buf, positionMethod);
+    jint v_pos = env->CallIntMethod(v_buf, positionMethod);
 
-        TTInstance* inst = GetTTInstance(env, thiz);
-        if (inst == nullptr) return;
+    // اعمال آفست روی پوینترهای بومی دریافتی از GetDirectBufferAddress
+    uint8_t* y_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(y_buf)) + y_pos;
+    uint8_t* u_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(u_buf)) + u_pos;
+    uint8_t* v_data = reinterpret_cast<uint8_t*>(env->GetDirectBufferAddress(v_buf)) + v_pos;
 
-        int out_width = (rotation == 90 || rotation == 270) ? height : width;
-        int out_height = (rotation == 90 || rotation == 270) ? width : height;
+    if (!y_data || !u_data || !v_data) return;
 
-        int y_size = out_width * out_height;
-        int uv_width = out_width / 2;
-        int uv_height = out_height / 2;
-        int uv_size = uv_width * uv_height;
-        int total_size = y_size + 2 * uv_size;
+    TTInstance* inst = GetTTInstance(env, thiz);
+    if (inst == nullptr) return;
 
-        static thread_local std::vector<uint8_t> out_buffer;
-        if (out_buffer.size() < static_cast<size_t>(total_size)) {
-            out_buffer.resize(total_size);
-        }
+    int out_width = (rotation == 90 || rotation == 270) ? height : width;
+    int out_height = (rotation == 90 || rotation == 270) ? width : height;
 
-        uint8_t* dst_y = out_buffer.data();
-        uint8_t* dst_u = dst_y + y_size;
-        uint8_t* dst_v = dst_u + uv_size;
+    int y_size = out_width * out_height;
+    int uv_width = out_width / 2;
+    int uv_height = out_height / 2;
+    int uv_size = uv_width * uv_height;
+    int total_size = y_size + 2 * uv_size;
 
-        if (rotation == 90) {
-            for (int r = 0; r < height; ++r) {
-                int src_row = r * y_stride;
-                for (int c = 0; c < width; ++c) {
-                    dst_y[c * height + (height - 1 - r)] = y_data[src_row + c];
-                }
-            }
-            for (int r = 0; r < height / 2; ++r) {
-                int src_u_row = r * u_stride;
-                int src_v_row = r * v_stride;
-                for (int c = 0; c < width / 2; ++c) {
-                    int dst_idx = c * (height / 2) + ((height / 2) - 1 - r);
-                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
-                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
-                }
-            }
-        } 
-        else if (rotation == 180) {
-            for (int r = 0; r < height; ++r) {
-                int src_row = r * y_stride;
-                int dst_row = (height - 1 - r) * width;
-                for (int c = 0; c < width; ++c) {
-                    dst_y[dst_row + (width - 1 - c)] = y_data[src_row + c];
-                }
-            }
-            for (int r = 0; r < height / 2; ++r) {
-                int src_u_row = r * u_stride;
-                int src_v_row = r * v_stride;
-                int dst_row = ((height / 2) - 1 - r) * (width / 2);
-                for (int c = 0; c < width / 2; ++c) {
-                    int dst_idx = dst_row + ((width / 2) - 1 - c);
-                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
-                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
-                }
-            }
-        } 
-        else if (rotation == 270) {
-            for (int r = 0; r < height; ++r) {
-                int src_row = r * y_stride;
-                for (int c = 0; c < width; ++c) {
-                    dst_y[(width - 1 - c) * height + r] = y_data[src_row + c];
-                }
-            }
-            for (int r = 0; r < height / 2; ++r) {
-                int src_u_row = r * u_stride;
-                int src_v_row = r * v_stride;
-                for (int c = 0; c < width / 2; ++c) {
-                    int dst_idx = ((width / 2) - 1 - c) * (height / 2) + r;
-                    dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
-                    dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
-                }
-            }
-        }
-        else {
-            for (int r = 0; r < height; ++r) {
-                memcpy(dst_y + r * width, y_data + r * y_stride, width);
-            }
-            for (int r = 0; r < height / 2; ++r) {
-                int dst_offset = r * (width / 2);
-                int src_u_row = r * u_stride;
-                int src_v_row = r * v_stride;
-                for (int c = 0; c < width / 2; ++c) {
-                    dst_u[dst_offset + c] = u_data[src_u_row + c * u_pix_stride];
-                    dst_v[dst_offset + c] = v_data[src_v_row + c * v_pix_stride];
-                }
-            }
-        }
-
-        // فراخوانی مستقیم تابع صادره با آدرس نمونه فعال و فرمت I420 (شناسه ۱۰۰)
-        TT_PushInternalVideo(inst, reinterpret_cast<const char*>(dst_y), total_size, out_width, out_height, 100, JFALSE);
+    static thread_local std::vector<uint8_t> out_buffer;
+    if (out_buffer.size() < static_cast<size_t>(total_size)) {
+        out_buffer.resize(total_size);
     }
+
+    uint8_t* dst_y = out_buffer.data();
+    uint8_t* dst_u = dst_y + y_size;
+    uint8_t* dst_v = dst_u + uv_size;
+
+    if (rotation == 90) {
+        for (int r = 0; r < height; ++r) {
+            int src_row = r * y_stride;
+            for (int c = 0; c < width; ++c) {
+                dst_y[c * height + (height - 1 - r)] = y_data[src_row + c];
+            }
+        }
+        for (int r = 0; r < height / 2; ++r) {
+            int src_u_row = r * u_stride;
+            int src_v_row = r * v_stride;
+            for (int c = 0; c < width / 2; ++c) {
+                int dst_idx = c * (height / 2) + ((height / 2) - 1 - r);
+                dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+            }
+        }
+    } 
+    else if (rotation == 180) {
+        for (int r = 0; r < height; ++r) {
+            int src_row = r * y_stride;
+            int dst_row = (height - 1 - r) * width;
+            for (int c = 0; c < width; ++c) {
+                dst_y[dst_row + (width - 1 - c)] = y_data[src_row + c];
+            }
+        }
+        for (int r = 0; r < height / 2; ++r) {
+            int src_u_row = r * u_stride;
+            int src_v_row = r * v_stride;
+            int dst_row = ((height / 2) - 1 - r) * (width / 2);
+            for (int c = 0; c < width / 2; ++c) {
+                int dst_idx = dst_row + ((width / 2) - 1 - c);
+                dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+            }
+        }
+    } 
+    else if (rotation == 270) {
+        for (int r = 0; r < height; ++r) {
+            int src_row = r * y_stride;
+            for (int c = 0; c < width; ++c) {
+                dst_y[(width - 1 - c) * height + r] = y_data[src_row + c];
+            }
+        }
+        for (int r = 0; r < height / 2; ++r) {
+            int src_u_row = r * u_stride;
+            int src_v_row = r * v_stride;
+            for (int c = 0; c < width / 2; ++c) {
+                int dst_idx = ((width / 2) - 1 - c) * (height / 2) + r;
+                dst_u[dst_idx] = u_data[src_u_row + c * u_pix_stride];
+                dst_v[dst_idx] = v_data[src_v_row + c * v_pix_stride];
+            }
+        }
+    }
+    else {
+        for (int r = 0; r < height; ++r) {
+            memcpy(dst_y + r * width, y_data + r * y_stride, width);
+        }
+        for (int r = 0; r < height / 2; ++r) {
+            int dst_offset = r * (width / 2);
+            int src_u_row = r * u_stride;
+            int src_v_row = r * v_stride;
+            for (int c = 0; c < width / 2; ++c) {
+                dst_u[dst_offset + c] = u_data[src_u_row + c * u_pix_stride];
+                dst_v[dst_offset + c] = v_data[src_v_row + c * v_pix_stride];
+            }
+        }
+    }
+
+    TT_PushInternalVideo(inst, reinterpret_cast<const char*>(dst_y), total_size, out_width, out_height, 100, JFALSE);
+}
     
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_setVoiceActivationLevel(JNIEnv* env,
                                                                                      jobject thiz,
