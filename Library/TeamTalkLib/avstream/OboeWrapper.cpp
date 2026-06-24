@@ -196,6 +196,7 @@ void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::R
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     bool useVoiceCom = (inputdeviceid & 0x10000) != 0;
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
+    bool hasSessionId = (inputdeviceid & 0x80000) != 0;
     int realDeviceId = inputdeviceid & SOUND_DEVICEID_MASK;
 
     // رفع باگ مونو/استریو:
@@ -225,6 +226,10 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
+    if (hasSessionId) {
+    builder.setSessionId((oboe::SessionId)realDeviceId);
+    MYTRACE(ACE_TEXT("Oboe Input: Using Specific Session ID: %d\n"), realDeviceId);
+}
 
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
@@ -307,6 +312,7 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     streamer->stream.reset();
 
     bool useVoiceCom = (streamer->inputdeviceid & 0x10000) != 0;
+    bool hasSessionId = (streamer->inputdeviceid & 0x80000) != 0;
     int realDeviceId = streamer->inputdeviceid & SOUND_DEVICEID_MASK;
 
     oboe::AudioStreamBuilder builder;
@@ -316,6 +322,9 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     builder.setSampleRate(streamer->samplerate);
     builder.setDataCallback(streamer.get());
     builder.setErrorCallback(streamer.get());
+    if (hasSessionId) {
+        builder.setSessionId((oboe::SessionId)realDeviceId);
+    }
     
     if ((features & SOUNDDEVICEFEATURE_AEC) || (features & SOUNDDEVICEFEATURE_AGC) || (features & SOUNDDEVICEFEATURE_DENOISE)) {
         builder.setInputPreset(oboe::InputPreset::VoiceCommunication);
@@ -398,6 +407,7 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
     bool useVoiceCom = (outputdeviceid & 0x10000) != 0;
     bool forceStereo = (outputdeviceid & 0x20000) != 0;
+    bool hasSessionId = (outputdeviceid & 0x80000) != 0;
     int realDeviceId = outputdeviceid & SOUND_DEVICEID_MASK;
 
     // رفع باگ مونو/استریو:
@@ -428,6 +438,10 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
     builder.setChannelConversionAllowed(true);
     builder.setFormatConversionAllowed(true);
     builder.setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
+    if (hasSessionId) {
+    builder.setSessionId((oboe::SessionId)realDeviceId);
+    MYTRACE(ACE_TEXT("Oboe Output: Using Specific Session ID: %d\n"), realDeviceId);
+}
 
     if (realDeviceId == DEFAULT_DEVICE_ID) {
         builder.setAudioApi(oboe::AudioApi::OpenSLES);
