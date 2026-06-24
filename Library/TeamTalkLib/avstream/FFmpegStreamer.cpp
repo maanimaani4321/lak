@@ -556,6 +556,10 @@ void FFmpegStreamer::Run()
 //                 cout << "Audio frame " << n_audframe++ << " at time " << (tm * av_q2d(aud_time_base)) << endl;
 
                 /* push the audio data from decoded frame into the filtergraph */
+    if (aud_buffersrc_ctx == nullptr) {
+        MYTRACE(ACE_TEXT("Audio buffer source context is null, skipping frame\n"));
+        continue;
+    }
                 if (av_buffersrc_add_frame(aud_buffersrc_ctx, aud_frame) < 0) {
                     MYTRACE(ACE_TEXT("Error while feeding the audio filtergraph\n"));
                     break;
@@ -593,6 +597,10 @@ void FFmpegStreamer::Run()
                 // vid_frame->pts = av_frame_get_best_effort_timestamp(vid_frame);
 
                 /* push the decoded frame into the filtergraph */
+    if (vid_buffersrc_ctx == nullptr) {
+        MYTRACE(ACE_TEXT("Video buffer source context is null, skipping frame\n"));
+        break;
+    }
                 if (av_buffersrc_add_frame(vid_buffersrc_ctx, vid_frame) < 0)
                 {
                     MYTRACE(ACE_TEXT("Error while feeding the filtergraph\n"));

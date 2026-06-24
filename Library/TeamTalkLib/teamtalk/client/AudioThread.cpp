@@ -661,10 +661,7 @@ bool has_internal_data = false;
 
             m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
         } else {
-            // شرط ۳: پکت صوتی در بافر داخلی موجود نیست یا در حال بافرینگ اولیه هستیم
-            if (m_internal_audio_fifo.empty()) {
                 m_internal_buffering = true;
-            }
         }
     }
 
