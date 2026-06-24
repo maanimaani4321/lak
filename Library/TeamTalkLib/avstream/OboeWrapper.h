@@ -28,6 +28,7 @@
 #include <oboe/Oboe.h>
 #include <mutex>
 #include <vector>
+#include <memory>
 
 namespace soundsystem {
 
