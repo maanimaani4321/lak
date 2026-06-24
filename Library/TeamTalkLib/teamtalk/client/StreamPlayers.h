@@ -110,6 +110,7 @@ namespace teamtalk {
         ::AVFilterContext* m_buffersink_ctx = nullptr;
         ::AVFilterContext* m_buffersrc_ctx = nullptr;
         std::vector<short> m_filter_fifo;
+        int m_silence_feed_counter = 8000;
 
         bool InitFFmpegFilter(int samplerate, int channels);
         void FreeFFmpegFilter();

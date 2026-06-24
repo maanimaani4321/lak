@@ -581,6 +581,7 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Android")
       --disable-programs
       # Minimal build
       --disable-autodetect
+      --enable-openssl
       --enable-zlib
       # Compile options
       --disable-debug
