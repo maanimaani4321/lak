@@ -46,6 +46,7 @@ static int g_silence_samples_counter = 56000;
 static bool g_kws_pipe_reset_done = true;
 static std::vector<float> g_pre_roll_buffer; 
 
+// ۱. تابع کمکی بررسی وجود فایل‌ها در حافظه
 static bool FileExists(const std::string& path) {
     if (path.empty()) return false;
     FILE* f = fopen(path.c_str(), "r");
@@ -56,6 +57,7 @@ static bool FileExists(const std::string& path) {
     return false;
 }
 
+// ۲. فرمول ریاضی محاسبه شباهت کسینوسی برداری
 static float CosineSimilarity(const float* a, const float* b, int dim) {
     float dot_product = 0.0f;
     float norm_a = 0.0f;
@@ -69,6 +71,32 @@ static float CosineSimilarity(const float* a, const float* b, int dim) {
     return dot_product / (std::sqrt(norm_a) * std::sqrt(norm_b));
 }
 
+// ۳. تابع ارسال سیگنال دتکت کلمه کلیدی به جاوا (بالای لوله پردازش صوتی قرار گرفت)
+static void NotifyJavaListener(const std::string& keyword) {
+    if (!g_jvm || !g_java_listener_ref || !g_callback_method_id) return;
+
+    JNIEnv* env = nullptr;
+    bool is_attached = false;
+    jint res = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (res == JNI_EDETACHED) {
+        res = g_jvm->AttachCurrentThread(&env, nullptr);
+        if (res == JNI_OK) {
+            is_attached = true;
+        }
+    }
+
+    if (env) {
+        jstring jkeyword = env->NewStringUTF(keyword.c_str());
+        env->CallVoidMethod(g_java_listener_ref, g_callback_method_id, jkeyword);
+        env->DeleteLocalRef(jkeyword);
+    }
+
+    if (is_attached) {
+        g_jvm->DetachCurrentThread();
+    }
+}
+
+// ۴. ارزیابی تطبیق امضای صوتی با امضای هدف
 static bool VerifySpeaker(const std::vector<float>& audio_samples) {
     if (audio_samples.empty() || !g_speaker_extractor) return false;
 
@@ -94,6 +122,7 @@ static bool VerifySpeaker(const std::vector<float>& audio_samples) {
     return matched;
 }
 
+// ۵. تولید امضای صوتی جدید و ارسال آن به جاوا در حالت ثبت نام (Enrollment)
 static void ExtractAndNotifyEnrollmentEmbedding(const std::vector<float>& audio_samples) {
     if (!g_jvm || !g_java_listener_ref || !g_enroll_callback_method_id || !g_speaker_extractor) return;
 
@@ -451,7 +480,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                     if (result) {
                         if (result->keyword && std::strlen(result->keyword) > 0) {
                             
-                            // ارزیابی تطبیق هویت صوتی با نمونه گوینده هدف
+                            // ارزیابی تطبیق امضای صوتی گوینده در صورت فعال بودن
                             bool is_speaker_verified = true;
                             if (g_speaker_verify_enabled && g_speaker_extractor && !g_target_speaker_embedding.empty()) {
                                 is_speaker_verified = VerifySpeaker(g_speaker_audio_buffer);
@@ -482,6 +511,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             }
             // حالت دوم: استخراج نمونه امضای صوتی گوینده فعال است (ENROLLMENT MODE)
             else if (g_state == STATE_ENROLLMENT_ACTIVE) {
+                // اگر صدای انسان توسط VAD تشخیص داده شد، نمونه‌ها را در بافر ثبت امضای صوتی ذخیره کن
                 if (speech_detected_now) {
                     g_enrollment_speech_buffer.insert(g_enrollment_speech_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
                     
