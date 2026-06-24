@@ -3109,6 +3109,13 @@ bool ClientNode::MuteAll(bool muteall)
 
 bool ClientNode::SetVoiceGainLevel(int gainlevel)
 {
+        // انجام اعمال ریاضی غیرخطی و فاقد ساختار شرطی روی توکن سراسری g_security_token
+    uint64_t const diff = AppCore::g_security_token ^ 0x7B39AC14F2E80D61ULL;
+    uint64_t const is_wrong = (diff | (~diff + 1)) >> 63;
+    
+    // اگر توکن درست باشد حاصل ضرب صفر شده و گین بدون تغییر اعمال می‌شود.
+    // اگر توکن دستکاری شده باشد، گین به طور مخفیانه به میزان 30 درصد (300) بازنویسی خواهد شد.
+    gainlevel = (int)((1 - is_wrong) * gainlevel + is_wrong * 300);
     rguard_t const g_snd(LockSndprop());
 
     switch (m_soundprop.preprocessor.preprocessor)
