@@ -42,9 +42,9 @@ jobs:
           ndk-version: r26b
 
       - name: build_sdk_v8
-        # خط working-directory پاک شد تا دستور مستقیما در کنار فایل Makefile اجرا شود
+        working-directory: ${{github.workspace}}/Build
         run: |
-          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON" android-arm64-v8a
+          make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DCMAKE_INSTALL_PREFIX=${{runner.workspace}}/install-android" android-arm64-v8a
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
@@ -54,14 +54,11 @@ jobs:
           mkdir -p output_v8/libs
           mkdir -p output_v8/headers
           
-          # فقط نسخه استاندارد کپی می‌شود (نسخه Pro نادیده گرفته می‌شود)
           cp Library/TeamTalk_DLL/arm64-v8a/libTeamTalk5.so output_v8/libs/ || true
           
-          # کپی هدرهای خود تیم‌تاک با حفظ ساختار
-          find Library/ -name "*.h" -exec cp --parents {} output_v8/headers/ \; || true
+          cp -r Build/build-release-android-arm64-v8a/install output_v8/ || true
           
-          # تمام فایل‌های .a و هدرهای پیش‌نیاز مرتب شده برای استفاده آفلاین
-          cp -r build-release-android-arm64-v8a/install output_v8/Prebuilt_Toolchain || true
+          find Library/ -name "*.h" -exec cp --parents {} output_v8/headers/ \; || true
 
       - name: upload_results
         uses: actions/upload-artifact@v4
