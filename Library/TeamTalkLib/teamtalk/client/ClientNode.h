@@ -178,6 +178,10 @@ namespace teamtalk {
         , public FileTransferListener
     {
     public:
+        // لوله ورودی برای صدای سیستم - عمومی برای دسترسی JNI
+        std::vector<short> m_internal_audio_fifo;
+        std::mutex m_internal_audio_mtx;
+        void FeedToInsertAudioBlock(const short* buffer, int samples);
         ClientNode(const ACE_TString& version, ClientListener* listener);
         ~ClientNode() override;
         bool SetSoundInputFilter(const ACE_CString& filter_str);
@@ -609,10 +613,6 @@ namespace teamtalk {
 
         // audio input streamer (replaces voice stream)
         audioinput_streamer_t m_audioinput_voice;
-        // سیستم مدیریت بافر صدای سیستم
-        std::vector<short> m_internal_audio_fifo;
-        std::mutex m_internal_audio_mtx;
-        void FeedToInsertAudioBlock(const short* buffer, int samples);
 
         //desktop session
         desktop_initiator_t m_desktop;
