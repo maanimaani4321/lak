@@ -1,5 +1,6 @@
 #include "KwsManager.h"
 #include "codec/OggFileIO.h"
+#include "codec/MediaUtil.h"
 #include "avstream/AudioResampler.h"
 #include "sherpa-onnx/c-api/c-api.h"
 #include <mutex>

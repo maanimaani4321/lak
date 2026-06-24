@@ -4,7 +4,10 @@
 #include <jni.h>
 #include <string>
 #include <vector>
-#include "codec/MediaUtil.h"
+
+namespace media {
+    struct AudioFrame;
+}
 
 namespace teamtalk {
 
