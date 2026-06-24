@@ -6154,11 +6154,11 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         if ( (m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID) || 
              m_soundsystem->IsStreamStopped(static_cast<StreamCapture*>(this)) ) {
             if (!m_callback_fifo.empty()) {
-                m_internal_audio_fifo.insert(m_internal_audio_fifo.begin(), m_callback_fifo.begin(), m_callback_fifo.end());
                 m_callback_fifo.clear();
-                if (m_internal_audio_fifo.size() < (size_t)required_total) break;
             }
-
+            if (m_voice_stream_id == 0) {
+                GEN_NEXT_ID(m_voice_stream_id);
+            }
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
         
@@ -6168,6 +6168,7 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
         raw_frame->force_enc = true;
+        raw_frame->streamid = m_voice_stream_id;
         raw_frame->sample_no = m_soundprop.samples_recorded;
         m_soundprop.samples_recorded += target_samples;
         raw_frame->timestamp = GETTIMESTAMP();
