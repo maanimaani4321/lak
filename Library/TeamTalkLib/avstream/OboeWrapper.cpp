@@ -24,6 +24,7 @@
 #include "OboeWrapper.h"
 #include "SoundSystemEx.h"
 #include "myace/MyACE.h"
+#include "avstream/KwsManager.h" // اضافه شد
 #include <cassert>
 #include <cstring>
 #include <algorithm>
@@ -166,6 +167,7 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
+    teamtalk::KwsProcessAudio(pcmData, numFrames, channels, samplerate);
 
     if (fifo_size + totalIncomingSamples <= fifo_capacity) {
         std::memcpy(&fifo_buffer[fifo_size], pcmData, totalIncomingSamples * sizeof(short));

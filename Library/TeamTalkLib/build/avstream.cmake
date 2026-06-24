@@ -9,6 +9,9 @@ list (APPEND AVSTREAM_HEADERS ${TEAMTALKLIB_ROOT}/avstream/MediaPlayback.h)
 list (APPEND AVSTREAM_SOURCES ${TEAMTALKLIB_ROOT}/avstream/AudioInputStreamer.cpp)
 list (APPEND AVSTREAM_HEADERS ${TEAMTALKLIB_ROOT}/avstream/AudioInputStreamer.h)
 
+list (APPEND AVSTREAM_SOURCES ${TEAMTALKLIB_ROOT}/avstream/KwsManager.cpp)
+list (APPEND AVSTREAM_HEADERS ${TEAMTALKLIB_ROOT}/avstream/KwsManager.h)
+
 if (FEATURE_SPEEXDSP)
   include (speexdsp)
   list (APPEND AVSTREAM_COMPILE_FLAGS -DENABLE_SPEEXDSP)
