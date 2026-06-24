@@ -17,8 +17,35 @@ jobs:
       - name: install_dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full zip pkg-config wget python3 python3-pip
+          sudo apt-get install -y autoconf cmake libtool ninja-build p7zip-full pkg-config wget python3 python3-pip zip unzip
           pip3 install pyelftools --break-system-packages
+
+      - name: Download O-MVLL Plugin
+        run: |
+          echo "Downloading O-MVLL 1.6.0..."
+          wget https://github.com/open-obfuscator/o-mvll/releases/download/1.6.0/omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
+          tar -xzf omvll_v1-6-0_linux_2026-04-23T13_47_22.tar.gz
+          find . -name "omvll-ndk.so" -exec cp {} . \;
+          chmod +x omvll-ndk.so
+          ls -l omvll-ndk.so
+          
+
+          sudo mkdir -p /cpython-install
+          
+          PYTHON_SRC=$(find $(pwd) -name "Python-3.10.7" -type d | head -n 1)
+          sudo cp -r $PYTHON_SRC/* /cpython-install/
+          
+          if [ -d "/cpython-install/Lib" ]; then
+            sudo ln -s /cpython-install/Lib /cpython-install/lib
+          fi
+          
+          sudo mkdir -p /cpython-install/lib/python3.10
+          sudo ln -s /cpython-install/Lib/* /cpython-install/lib/python3.10/ || true
+          
+          sudo cp ${{ github.workspace }}/omvll_config.py /cpython-install/lib/python3.10/
+          
+          echo "Final check of the paths:"
+          ls -l /cpython-install/lib/python3.10/omvll_config.py
 
       - name: setup_ndk
         uses: nttld/setup-ndk@v1
@@ -26,49 +53,46 @@ jobs:
         with:
           ndk-version: r26b
 
-      # مرحله بررسی و دانلود فایل زیپ طبیعی از Release
-      - name: Check and Download Prebuilt Dependencies
-        id: check_prebuilt
+      # مرحله جایگزین شده به جای کش قدیمی؛ بازیابی از Releases گیت‌هاب به مسیر کاملاً بومی و طبیعی
+      - name: Retrieve Pre-built Toolchain from Releases
+        id: get-prebuilt
         run: |
-          # ساخت مسیر درختی طبیعی پروژه قبل از آنزیپ
+          # ساخت مسیر درختی بومی پروژه پیش از استخراج فایل زیپ جهت جلوگیری از خطای آدرس‌دهی
           mkdir -p Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build
           
-          # تلاش برای دانلود فایل زیپ از ریلیز با تگ prebuilts
+          echo "Checking for pre-compiled dependencies in GitHub Releases..."
           if gh release download prebuilts -p "dependencies-arm64-v8a.zip" -D . --clobber 2>/dev/null; then
-            echo "Prebuilt dependencies ZIP found in Releases! Extracting to natural directory..."
-            # استخراج فایل زیپ دقیقاً در همان مسیر پیش‌فرض ساختار بیلد پروژه
+            echo "Pre-compiled dependencies ZIP found. Unzipping directly to natural build directory..."
             unzip -q dependencies-arm64-v8a.zip -d Build/build-release-android-arm64-v8a/Library/TeamTalkLib/build/
-            echo "has_prebuilt=true" >> $GITHUB_OUTPUT
+            echo "cache-hit=true" >> $GITHUB_OUTPUT
           else
-            echo "No prebuilt dependencies ZIP found in Releases. Will compile from scratch."
-            echo "has_prebuilt=false" >> $GITHUB_OUTPUT
+            echo "Pre-compiled dependencies ZIP not found."
+            echo "cache-hit=false" >> $GITHUB_OUTPUT
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # اجرای بیلد طبیعی بدون تغییر مسیرها
       - name: build_sdk_v8
         working-directory: ${{github.workspace}}/Build
         run: |
-          if [ "${{ steps.check_prebuilt.outputs.has_prebuilt }}" = "true" ]; then
-            echo "Natural prebuilts found! Skipping external build to save time."
-            # بیلد فقط با گزینه OFF کردن پروژه‌های خارجی (بدون تغییر مسیر پیش‌فرض)
+          if [ "${{ steps.get-prebuilt.outputs.cache-hit }}" = "true" ]; then
+            echo "Cache hit! Reusing pre-built toolchain libraries to save time."
             make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=OFF" android-arm64-v8a
           else
-            echo "No prebuilts found. Starting natural compile from scratch..."
+            echo "Cache miss! Compiling the entire toolchain from scratch."
             make CMAKE_EXTRA="-G Ninja -DFEATURE_WEBRTC=ON -DTOOLCHAIN_BUILD_EXTERNALPROJECTS=ON" android-arm64-v8a
             
-            # پس از اتمام موفق بیلد طبیعی، پوشه پیش‌فرض install را زیپ می‌کنیم
-            echo "Compiling finished. Packaging the natural install folder..."
+            # پس از پایان بیلد طبیعی، پوشه ایزوله install را فشرده کرده و به ریشه پروژه منتقل می‌کنیم
+            echo "Compiling completed. Packaging the natural dependencies install folder..."
             cd build-release-android-arm64-v8a/Library/TeamTalkLib/build/
             zip -r ../../../../../dependencies-arm64-v8a.zip install
           fi
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
-      # اگر در مرحله قبل بیلد کامل انجام شده باشد، فایل زیپ جدید را در Releases آپلود خودکار می‌کند
-      - name: Upload to GitHub Releases (For automated cache)
-        if: steps.check_prebuilt.outputs.has_prebuilt != 'true'
+      # ذخیره‌سازی خودکار در بخش Release مخزن شما جهت استفاده‌های برنامه‌نویسی جریان کارهای بعدی
+      - name: Upload Prebuilt Dependencies to GitHub Releases
+        if: steps.get-prebuilt.outputs.cache-hit != 'true'
         run: |
           echo "Uploading prebuilt package to GitHub Releases..."
           gh release upload prebuilts dependencies-arm64-v8a.zip --clobber || \
@@ -76,9 +100,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # فایل‌های حاصل را هم به صورت فایل زیپ در تب Artifacts قرار می‌دهد تا بتوانید دستی دانلود کنید
-      - name: Upload Dependency ZIP to Actions Artifacts (For manual download)
-        if: steps.check_prebuilt.outputs.has_prebuilt != 'true'
+      # ذخیره‌سازی در آرتفکشن اجرای جاری جهت دسترسی راحت و دانلود دستی مستقیم شما از تب Actions گیت‌هاب
+      - name: Upload Prebuilt Dependencies to Actions Artifacts
+        if: steps.get-prebuilt.outputs.cache-hit != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: prebuilt-dependencies-android-arm64-v8a
@@ -88,6 +112,8 @@ jobs:
         if: always()
         run: |
           mkdir -p final_output/binaries
+          mkdir -p final_output/dependencies
+          
           find . -name "libTeamTalk5*jni.so" ! -name "*Pro*" -exec cp {} final_output/binaries/ \; || true
           
           mkdir -p final_output/teamtalk_headers
