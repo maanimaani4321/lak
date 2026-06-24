@@ -183,6 +183,9 @@ public:
     // return previous offset (was)
     ACE_UINT32 SetOffset(ACE_UINT32 offset);
 
+    virtual void UpdatePlayback(uint32_t offset, float speed) {
+        SetOffset(offset);
+    }
     const MediaFileProp& GetMediaFile() const { return m_media_in; }
 
     bool Completed() const;

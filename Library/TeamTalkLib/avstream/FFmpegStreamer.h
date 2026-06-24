@@ -25,6 +25,7 @@
 #define AVCONVWRAPPER_H
 
 #include "MediaStreamer.h"
+#include <atomic>
 
 #include <ace/SString.h>
 
@@ -43,6 +44,8 @@ public:
     ~FFmpegStreamer() override;
 
     virtual bool IsSystemTime() const { return false; }
+    
+    void UpdatePlayback(uint32_t offset, float speed) override;
 
 protected:
     virtual bool SetupInput(const struct AVInputFormat *iformat,
@@ -54,6 +57,8 @@ protected:
                             int& video_stream_index);
 
 private:
+        std::atomic<bool> m_rebuild_graph{false};
+    uint64_t m_audio_samples_out = 0;
     void Run() override;
 
     int64_t ProcessAudioBuffer(struct AVFilterContext* aud_buffersink_ctx,

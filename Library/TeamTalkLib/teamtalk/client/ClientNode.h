@@ -268,7 +268,8 @@ namespace teamtalk {
                                      float speed);
         bool UpdateStreamingMediaFile(uint32_t offset, bool paused,
                                       const AudioPreprocessor& preprocessor,
-                                      const VideoCodec& vid_codec);
+                                      const VideoCodec& vid_codec,
+                                      float speed);
         void StopStreamingMediaFile(bool killtimer = true);
 
         // playback local media file
