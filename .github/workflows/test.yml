@@ -29,8 +29,16 @@ jobs:
           chmod +x omvll-ndk.so
           ls -l omvll-ndk.so
           
+
           sudo mkdir -p /cpython-install
-          sudo cp -r Python-3.10.7/* /cpython-install/
+          
+          PYTHON_SRC_DIR=$(find $(pwd) -name "Python-3.10.7" -type d | head -n 1)
+          echo "Python source found at: $PYTHON_SRC_DIR"
+          
+          sudo cp -rv $PYTHON_SRC_DIR/* /cpython-install/
+          
+          echo "Checking if encodings exists..."
+          ls -d /cpython-install/lib/python3.10/encodings || echo "ERROR: encodings folder not found in target!"
           
           sudo chmod -R 755 /cpython-install
 
