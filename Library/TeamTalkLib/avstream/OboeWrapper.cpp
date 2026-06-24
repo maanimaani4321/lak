@@ -93,8 +93,6 @@ void OboeWrapper::FillDevices(sounddevices_t& sounddevs) {
 oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) {
     std::lock_guard<std::recursive_mutex> g(mutex);
     
-    // Oboe ممکن است تعداد فریم‌هایی متفاوت با فریم‌سایز دقیق ما بدهد
-    // اما ما در اینجا مستقیم آن را به سمت بالا می‌فرستیم و TeamTalk خودش بافر می‌کند
     recorder->StreamCaptureCb(*this, static_cast<const short*>(audioData), numFrames);
     
     return oboe::DataCallbackResult::Continue;
@@ -134,11 +132,6 @@ bool OboeWrapper::StartStream(inputstreamer_t streamer) {
     return streamer->stream->requestStart() == oboe::Result::OK;
 }
 
-bool OboeWrapper::StopStream(inputstreamer_t streamer) {
-    if (!streamer->stream) return false;
-    return streamer->stream->requestStop() == oboe::Result::OK;
-}
-
 void OboeWrapper::CloseStream(inputstreamer_t streamer) {
     if (streamer->stream) {
         streamer->stream->requestStop();
@@ -151,12 +144,12 @@ void OboeWrapper::CloseStream(inputstreamer_t streamer) {
 bool OboeWrapper::IsStreamStopped(inputstreamer_t streamer) {
     if (!streamer->stream) return true;
     return streamer->stream->getState() == oboe::StreamState::Stopped || 
-           streamer->stream->getState() == oboe::StreamState::Closed;
+           streamer->stream->getState() == oboe::StreamState::Closed ||
+           streamer->stream->getState() == oboe::StreamState::Stopping;
 }
 
 bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     // در Oboe، ویژگی‌های سخت افزاری در زمان ساخت Stream تنظیم می‌شوند (InputPreset).
-    // برای آپدیت باید استریم ریستارت شود که تیم‌تاک خودش این کار را هندل می‌کند.
     return true; 
 }
 
@@ -216,7 +209,8 @@ bool OboeWrapper::StopStream(outputstreamer_t streamer) {
 bool OboeWrapper::IsStreamStopped(outputstreamer_t streamer) {
     if (!streamer->stream) return true;
     return streamer->stream->getState() == oboe::StreamState::Stopped || 
-           streamer->stream->getState() == oboe::StreamState::Closed;
+           streamer->stream->getState() == oboe::StreamState::Closed ||
+           streamer->stream->getState() == oboe::StreamState::Stopping;
 }
 
 } // namespace soundsystem

@@ -52,19 +52,21 @@ namespace soundsystem {
         soundgroup_t NewSoundGroup() override;
         void RemoveSoundGroup(soundgroup_t sndgrp) override;
 
+        // Input
         inputstreamer_t NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) override;
         bool StartStream(inputstreamer_t streamer) override;
-        bool StopStream(inputstreamer_t streamer) override;
         void CloseStream(inputstreamer_t streamer) override;
         bool IsStreamStopped(inputstreamer_t streamer) override;
         bool UpdateStreamCaptureFeatures(inputstreamer_t streamer) override;
 
+        // Output
         outputstreamer_t NewStream(StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) override;
         void CloseStream(outputstreamer_t streamer) override;
         bool StartStream(outputstreamer_t streamer) override;
         bool StopStream(outputstreamer_t streamer) override;
         bool IsStreamStopped(outputstreamer_t streamer) override;
 
+        // Duplex (Not Supported/Needed in this wrapper structure, mapped as dummy)
         duplexstreamer_t NewStream(StreamDuplex* duplex, int inputdeviceid, int outputdeviceid, int sndgrpid, int samplerate, int input_channels, int output_channels, int framesize) override { return nullptr; }
         void CloseStream(duplexstreamer_t streamer) override { }
         bool StartStream(duplexstreamer_t streamer) override { return false; }
