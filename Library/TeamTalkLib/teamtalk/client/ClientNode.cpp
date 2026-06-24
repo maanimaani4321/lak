@@ -6056,12 +6056,10 @@ void ClientNode::HandleRemoveFile(const mstrings_t& properties)
 void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     if (!m_mychannel || (m_flags & CLIENT_CONNECTED) == 0) return;
 
-    // ۱. دریافت فرمت هدف (فرمت کدک فعلی کانال)
     auto target_fmt = GetAudioCodecAudioFormat(m_mychannel->GetAudioCodec());
     int target_samples = GetAudioCodecCbSamples(m_mychannel->GetAudioCodec());
     
-    // ۲. بررسی و ایجاد رساپلر در صورت نیاز (تبدیل از 48k استریو به فرمت نیتیو کانال)
-    media::AudioFormat source_fmt(48000, 2); // فرمت ورودی ثابت از سمت لایه جاوا
+    media::AudioFormat source_fmt(48000, 2); 
     
     if (!m_internal_push_resampler || m_internal_push_resampler->GetInputFormat() != source_fmt || 
         m_internal_push_resampler->GetOutputFormat() != target_fmt) {
@@ -6073,38 +6071,61 @@ void ClientNode::FeedToInsertAudioBlock(const short* buffer, int samples) {
     
     int in_frames = samples / source_fmt.channels;
     
-    // ۳. رساپل کردن داده‌های ورودی با اعمال تعداد فریم‌های اصلاح شده
     int out_samples = m_internal_push_resampler->Resample(buffer, in_frames, 
                                                           m_internal_push_resample_buf.data(), 
                                                           (int)m_internal_push_resample_buf.size());
     
     if (out_samples > 0) {
-        // اضافه کردن داده‌های رساپل شده به انتهای بافر فیفو (FIFO)
         m_internal_audio_fifo.insert(m_internal_audio_fifo.end(), 
                                      m_internal_push_resample_buf.begin(), 
                                      m_internal_push_resample_buf.begin() + (out_samples * target_fmt.channels));
     }
 
-    // ۴. استخراج فریم‌های استاندارد مورد نیاز کدک و ارسال به ترد صوتی تیم‌تاک
+    // --- بخش جدید: مدیریت سقف بافر (۲ ثانیه) ---
+    // محاسبه حداکثر تعداد نمونه‌ها برای ۲ ثانیه (نرخ نمونه‌برداری * تعداد کانال * ۲)
+    size_t max_fifo_samples = (size_t)target_fmt.nSampleRate * target_fmt.nChannels * 2;
+    if (m_internal_audio_fifo.size() > max_fifo_samples) {
+        size_t samples_to_remove = m_internal_audio_fifo.size() - max_fifo_samples;
+        // برای جلوگیری از جابجایی کانال‌های چپ و راست در استریو، باید حتما مضربی از تعداد کانال باشد
+        if (samples_to_remove % target_fmt.nChannels != 0) {
+            samples_to_remove += (target_fmt.nChannels - (samples_to_remove % target_fmt.nChannels));
+        }
+        m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + samples_to_remove);
+    }
+
     int required_total = target_samples * target_fmt.channels;
+    int wait_frames = 5; // اینجا می‌توانید تعداد فریم انتظار را تنظیم کنید (مثلا 5 یا 8)
+    int wait_threshold = wait_frames * required_total;
+
+    // --- بخش جدید: مدیریت وضعیت Buffering ---
+    if (m_internal_buffering) {
+        if (m_internal_audio_fifo.size() >= (size_t)wait_threshold) {
+            m_internal_buffering = false; // بافر به حد نصاب رسید، پخش شروع شود
+        } else {
+            return; // هنوز به حد نصاب نرسیده، خارج می‌شویم تا داده جمع شود
+        }
+    }
+
     while (m_internal_audio_fifo.size() >= (size_t)required_total) {
         media::AudioFrame frame;
         frame.inputfmt = target_fmt;
         
-        // ساخت یک کپی از داده‌ها به دلیل پردازش غیرهمزمان (Async) در AudioThread
         ACE_Message_Block* mb = AudioFrameToMsgBlock(media::AudioFrame(target_fmt, m_internal_audio_fifo.data(), target_samples));
         
         auto* raw_frame = AudioFrameFromMsgBlock(mb);
         raw_frame->userdata = STREAMTYPE_VOICE;
-        raw_frame->force_enc = false;
+        raw_frame->force_enc = true;
         raw_frame->sample_no = m_soundprop.samples_recorded;
         m_soundprop.samples_recorded += target_samples;
         raw_frame->timestamp = GETTIMESTAMP();
 
-        // ارسال مستقیم بلاک صوتی آماده شده به صف ترد صدا
         m_voice_thread.QueueAudio(mb);
 
-        // پاکسازی فریم پردازش شده از ابتدای فیفو
         m_internal_audio_fifo.erase(m_internal_audio_fifo.begin(), m_internal_audio_fifo.begin() + required_total);
+    }
+
+    // اگر بافر کاملاً خالی شد، دوباره به حالت انتظار برو تا Jitter Buffer پر شود
+    if (m_internal_audio_fifo.empty()) {
+        m_internal_buffering = true;
     }
 }
