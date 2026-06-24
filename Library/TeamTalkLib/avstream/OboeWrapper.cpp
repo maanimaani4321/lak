@@ -198,7 +198,6 @@ inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
     bool hasSessionId = (inputdeviceid & 0x80000) != 0;
     int realDeviceId;
-t
 if (hasSessionId) {
     // اگر سشن آیدی است، فقط فلگ را حذف کن و کل عدد را بردار (بدون ماسک 0x7FF)
     realDeviceId = inputdeviceid & 0x7FFFF; 
@@ -326,7 +325,6 @@ bool OboeWrapper::UpdateStreamCaptureFeatures(inputstreamer_t streamer) {
     streamer->stream.reset();
 
     bool useVoiceCom = (streamer->inputdeviceid & 0x10000) != 0;
-    bool hasSessionId = (streamer->inputdeviceid & 0x80000) != 0;
     int realDeviceId = streamer->inputdeviceid & SOUND_DEVICEID_MASK;
 
     oboe::AudioStreamBuilder builder;
