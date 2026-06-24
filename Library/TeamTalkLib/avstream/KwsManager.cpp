@@ -618,7 +618,7 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
     #if defined(UNICODE)
         ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
     #else
-        ACE_TString t_filename = outputFile;
+        ACE_TString t_filename = outputFile.c_str();
     #endif
 
     int target_samplerate = 48000;
@@ -651,7 +651,7 @@ bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool
     #if defined(UNICODE)
         ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
     #else
-        ACE_TString t_filename = outputFile;
+        ACE_TString t_filename = outputFile.c_str();
     #endif
 
     int target_samplerate = 16000;
