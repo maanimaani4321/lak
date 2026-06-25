@@ -831,10 +831,23 @@ void ClientNode::OpenAudioCapture(const AudioCodec& codec)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
 
-    if (m_soundsystem && !m_soundsystem->IsStreamStopped(this))
+    if (m_soundsystem)
     {
-        MYTRACE(ACE_TEXT("OpenAudioCapture: Releasing active capture stream before reopening with new codec.\n"));
-        CloseAudioCapture();
+        bool is_capturing = false;
+        if ((m_flags & CLIENT_SNDINOUTPUT_DUPLEX) != 0u)
+        {
+            is_capturing = !m_soundsystem->IsStreamStopped(static_cast<soundsystem::StreamDuplex*>(this));
+        }
+        else
+        {
+            is_capturing = !m_soundsystem->IsStreamStopped(static_cast<soundsystem::StreamCapture*>(this));
+        }
+
+        if (is_capturing)
+        {
+            MYTRACE(ACE_TEXT("OpenAudioCapture: Releasing active capture stream before reopening with new codec.\n"));
+            CloseAudioCapture();
+        }
     }
 
     int const codec_samplerate = GetAudioCodecSampleRate(codec);
