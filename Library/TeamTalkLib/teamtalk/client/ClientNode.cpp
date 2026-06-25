@@ -6276,15 +6276,15 @@ teamtalk::AudioCodec ClientNode::GetActiveOrDefaultCodec()
 
     teamtalk::AudioCodec codec;
     codec.codec = teamtalk::CODEC_OPUS;
-    codec.opus.samplerate = 16000;
+    codec.opus.samplerate = 48000;
     codec.opus.channels = 1;
     codec.opus.complexity = 10;
     codec.opus.fec = true;
     codec.opus.dtx = false;
-    codec.opus.bitrate = 16000;
+    codec.opus.bitrate = 32000;
     codec.opus.vbr = true;
     codec.opus.vbr_constraint = false;
-    codec.opus.frame_size = 320;
+    codec.opus.frame_size = 960; // فریم ۲۰ میلی‌ثانیه‌ای استاندارد روی فرکانس ۴۸۰۰۰ هرتز
     codec.opus.application = 2048;
     codec.opus.frames_per_packet = 1;
     return codec;
