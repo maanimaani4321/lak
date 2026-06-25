@@ -363,6 +363,9 @@ bool KwsStartSpeakerEnrollment(JNIEnv* env) {
     if (!g_active || !g_speaker_extractor) return false;
     g_state = STATE_ENROLLMENT_ACTIVE;
     g_enrollment_speech_buffer.clear();
+
+    TT_UpdateOfflineAudioCapture();
+
     return true;
 }
 
