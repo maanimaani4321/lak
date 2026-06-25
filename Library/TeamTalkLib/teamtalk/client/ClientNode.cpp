@@ -827,6 +827,7 @@ void ClientNode::RecreateUdpSocket()
     m_packethandler.Open(localaddr);
 }
 
+
 void ClientNode::OpenAudioCapture(const AudioCodec& codec)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
@@ -841,8 +842,12 @@ void ClientNode::OpenAudioCapture(const AudioCodec& codec)
        m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID)
         return;
     
-    // track duration of initial audio frame
-    m_clientstats.streamcapture_delay_msec = 0;
+    if (m_voice_thread.thr_count() == 0)
+    {
+        StartOfflineVoiceThread(codec);
+    }
+
+    // track duration of initial audio frame    m_clientstats.streamcapture_delay_msec = 0;
     m_soundprop.samples_delay_msec = GETTIMESTAMP();
 
     bool opened = false;
@@ -2685,7 +2690,8 @@ bool ClientNode::InitSoundInputDevice(int inputdevice)
     if(!m_soundsystem->CheckInputDevice(inputdevice))
         return false;
 
-    rguard_t g_snd(LockSndprop());
+    
+rguard_t g_snd(LockSndprop());
     TTASSERT(m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID);
     m_soundprop.inputdeviceid = inputdevice;
     g_snd.release();
@@ -2696,8 +2702,12 @@ bool ClientNode::InitSoundInputDevice(int inputdevice)
         if(inputdevice != SOUNDDEVICE_IGNORE_ID)
             OpenAudioCapture(m_mychannel->GetAudioCodec());
     }
+    else if (teamtalk::IsLocalVoiceActive())
+    {
+        if(inputdevice != SOUNDDEVICE_IGNORE_ID)
+            OpenAudioCapture(GetActiveOrDefaultCodec());
+    }
     m_flags |= CLIENT_SNDINPUT_READY;
-
     return true;
 }
 
@@ -2751,6 +2761,8 @@ bool ClientNode::InitSoundDuplexDevices(int inputdeviceid,
     //restart audio capture in duplex mode
     if (m_mychannel)
         OpenAudioCapture(m_mychannel->GetAudioCodec());
+    else if (teamtalk::IsLocalVoiceActive())
+        OpenAudioCapture(GetActiveOrDefaultCodec());
 
     return true;
 }
@@ -4307,9 +4319,17 @@ void ClientNode::LeftChannel(ClientChannel& chan)
 
     //shutdown audio capture
     if(chan.GetAudioCodec().codec != CODEC_NO_CODEC)
-        CloseAudioCapture();
+    {
+        if (!teamtalk::IsLocalVoiceActive())
+        {
+            CloseAudioCapture();
+        }
+    }
 
-    m_voice_thread.StopEncoder();
+    if (!teamtalk::IsLocalVoiceActive())
+    {
+        m_voice_thread.StopEncoder();
+    }
 
     // remove "self" from muxed recording
     m_channelrecord.RemoveUser(LOCAL_TX_USERID, STREAMTYPE_VOICE);
@@ -6230,4 +6250,61 @@ bool ClientNode::SetUserSoundFilter(int userid, const std::string& filter_str)
         return true;
     }
     return false;
+}
+
+teamtalk::AudioCodec ClientNode::GetActiveOrDefaultCodec()
+{
+    if (m_mychannel)
+        return m_mychannel->GetAudioCodec();
+
+    teamtalk::AudioCodec codec;
+    codec.codec = teamtalk::CODEC_OPUS;
+    codec.opus.samplerate = 16000;
+    codec.opus.channels = 1;
+    codec.opus.complexity = 10;
+    codec.opus.fec = true;
+    codec.opus.dtx = false;
+    codec.opus.bitrate = 16000;
+    codec.opus.vbr = true;
+    codec.opus.vbr_constraint = false;
+    codec.opus.frame_size = 320;
+    codec.opus.application = 2048;
+    codec.opus.frames_per_packet = 1;
+    return codec;
+}
+
+bool ClientNode::StartOfflineVoiceThread(const teamtalk::AudioCodec& codec)
+{
+    if (m_voice_thread.thr_count() != 0)
+        return true;
+
+    auto cbenc = [this](const teamtalk::AudioCodec& c, const char* data, int len,
+                        const std::vector<int>& sizes, const media::AudioFrame& frame) {
+        EncodedAudioVoiceFrame(c, data, len, sizes, frame);
+    };
+    return m_voice_thread.StartEncoder(cbenc, codec, true);
+}
+
+void ClientNode::UpdateOfflineCaptureState()
+{
+    GUARD_REACTOR(this);
+
+    bool const local_active = teamtalk::IsLocalVoiceActive();
+    bool const capturing = ((m_flags & CLIENT_SNDINPUT_READY) != 0u) && 
+                           !m_soundsystem->IsStreamStopped(static_cast<StreamCapture*>(this));
+
+    if (local_active && !m_mychannel)
+    {
+        if (!capturing && m_soundprop.inputdeviceid != SOUNDDEVICE_IGNORE_ID)
+        {
+            OpenAudioCapture(GetActiveOrDefaultCodec());
+        }
+    }
+    else if (!local_active && !m_mychannel)
+    {
+        if (capturing)
+        {
+            CloseAudioCapture();
+        }
+    }
 }

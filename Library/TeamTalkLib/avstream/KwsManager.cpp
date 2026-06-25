@@ -9,6 +9,10 @@
 #include <cstring>
 #include <cmath>
 
+extern "C" {
+    void TT_UpdateOfflineAudioCapture();
+}
+
 namespace teamtalk {
 
 static std::recursive_mutex g_mutex;
@@ -336,6 +340,8 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
         g_speaker_audio_buffer.clear();
         g_enrollment_speech_buffer.clear();
 
+        TT_UpdateOfflineAudioCapture();
+
         return true;
     } catch (...) {
         if (g_speaker_extractor) {
@@ -401,6 +407,7 @@ void KwsStop(JNIEnv* env) {
     }
     g_callback_method_id = nullptr;
     g_enroll_callback_method_id = nullptr;
+    TT_UpdateOfflineAudioCapture();
 }
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
@@ -598,7 +605,18 @@ static void StopAssistant() {
         g_assistantResampler.reset();
         g_assistantFifo.clear();
         NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        TT_UpdateOfflineAudioCapture();
     }
+}
+
+bool IsLocalVoiceActive() {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_active || VoiceFeaturesManager::Instance().IsRecordingActive();
+}
+
+bool VoiceFeaturesManager::IsRecordingActive() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    return g_assistantActive || g_messageActive;
 }
 
 VoiceFeaturesManager& VoiceFeaturesManager::Instance() {
@@ -637,6 +655,8 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
     g_assistantSendToTT = sendToTeamTalk;
     g_assistantFifo.clear();
     g_assistantActive = true;
+    
+    TT_UpdateOfflineAudioCapture();
 
     return true;
 }
@@ -669,6 +689,8 @@ bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool
     g_messageSendToTT = sendToTeamTalk;
     g_messageFifo.clear();
     g_messageActive = true;
+    
+    TT_UpdateOfflineAudioCapture();
 
     return true;
 }
@@ -688,6 +710,7 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
         g_messageResampler.reset();
         g_messageFifo.clear();
         NotifyVoiceRecordingFinished(g_messageFile, 2);
+        TT_UpdateOfflineAudioCapture();
         return true;
     }
     return false;

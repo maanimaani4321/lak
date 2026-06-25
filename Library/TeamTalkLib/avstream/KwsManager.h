@@ -12,6 +12,8 @@ namespace media {
 
 namespace teamtalk {
 
+bool IsLocalVoiceActive();
+
 void KwsInit(JavaVM* vm);
 
 bool KwsStart(JNIEnv* env, jobject jlistener,
@@ -53,6 +55,7 @@ public:
 
     void FeedAudio(const media::AudioFrame& frame);
     bool ShouldSendToTeamTalk();
+    bool IsRecordingActive();
 
 private:
     VoiceFeaturesManager();

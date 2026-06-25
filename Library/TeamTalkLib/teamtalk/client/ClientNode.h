@@ -20,6 +20,7 @@
 #include "avstream/MediaStreamer.h"
 #include "avstream/SoundSystem.h"
 #include "avstream/VideoCapture.h"
+#include "avstream/KwsManager.h"
 #include "codec/MediaUtil.h"
 #include "teamtalk/Commands.h"
 #include "teamtalk/Common.h"
@@ -292,6 +293,9 @@ audio_resampler_t m_internal_push_resampler;
         bool StartInternalVideoTransmission(const VideoCodec& codec, int width, int height, int fps);
         void StopInternalVideoTransmission();
         void FeedToInsertVideoFrame(const char* lpData, int nDataSize, int nWidth, int nHeight, int nFourCC, bool bTopDown);
+                teamtalk::AudioCodec GetActiveOrDefaultCodec();
+        void UpdateOfflineCaptureState();
+        bool StartOfflineVoiceThread(const teamtalk::AudioCodec& codec);
         
         //returns VideoFrame* in ACE_Message_Block*
         ACE_Message_Block* AcquireVideoCaptureFrame();
