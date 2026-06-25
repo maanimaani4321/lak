@@ -827,17 +827,21 @@ void ClientNode::RecreateUdpSocket()
     m_packethandler.Open(localaddr);
 }
 
-
 void ClientNode::OpenAudioCapture(const AudioCodec& codec)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
+
+    if (m_soundsystem && !m_soundsystem->IsStreamStopped(this))
+    {
+        MYTRACE(ACE_TEXT("OpenAudioCapture: Releasing active capture stream before reopening with new codec.\n"));
+        CloseAudioCapture();
+    }
 
     int const codec_samplerate = GetAudioCodecSampleRate(codec);
     int const codec_samples = GetAudioCodecCbSamples(codec);
     int const codec_channels = GetAudioCodecChannels(codec);
 
     rguard_t const g_snd(LockSndprop());
-
     if(codec_samples <= 0 || codec_samplerate <= 0 || codec_channels == 0 ||
        m_soundprop.inputdeviceid == SOUNDDEVICE_IGNORE_ID)
         return;
