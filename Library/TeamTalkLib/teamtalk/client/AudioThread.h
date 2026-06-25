@@ -63,6 +63,7 @@ public:
     void SetForceMono(bool enable) { m_force_mono = enable; }
 bool GetForceMono() const { return m_force_mono; }
     AudioThread();
+    size_t thr_count() const { return ACE_Task<ACE_MT_SYNCH>::thr_count(); }
     void SetFFmpegFilter(const std::string& filter_str);
     std::string GetFFmpegFilter() {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);
