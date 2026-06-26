@@ -32,6 +32,29 @@
 #include <chrono>
 
 namespace soundsystem {
+    static std::recursive_mutex g_garbage_mutex;
+    static std::vector<std::pair<inputstreamer_t, uint32_t>> g_garbage_input_streamers;
+    static std::vector<std::pair<outputstreamer_t, uint32_t>> g_garbage_output_streamers;
+
+    static void CleanGarbageStreamers() {
+        std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
+        uint32_t const now = GETTIMESTAMP();
+        
+        // حذف شیء پس از گذشت ۳ ثانیه کامل (زمانی بسیار ایمن برای توقف سخت‌افزار)
+        g_garbage_input_streamers.erase(
+            std::remove_if(g_garbage_input_streamers.begin(), g_garbage_input_streamers.end(),
+                [now](const std::pair<inputstreamer_t, uint32_t>& item) {
+                    return W32_GEQ(now, item.second + 3000);
+                }),
+            g_garbage_input_streamers.end());
+
+        g_garbage_output_streamers.erase(
+            std::remove_if(g_garbage_output_streamers.begin(), g_garbage_output_streamers.end(),
+                [now](const std::pair<outputstreamer_t, uint32_t>& item) {
+                    return W32_GEQ(now, item.second + 3000);
+                }),
+            g_garbage_output_streamers.end());
+    }
 
 enum AndroidSoundDevice {
     DEFAULT_DEVICE_ID           = (0 & SOUND_DEVICEID_MASK),
@@ -195,6 +218,7 @@ void OboeInputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::R
 }
 
 inputstreamer_t OboeWrapper::NewStream(StreamCapture* capture, int inputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
+    CleanGarbageStreamers();
     bool useVoiceCom = (inputdeviceid & 0x10000) != 0;
     bool forceStereo = (inputdeviceid & 0x20000) != 0;
     bool hasSessionId = (inputdeviceid & 0x80000000) != 0;
@@ -298,13 +322,15 @@ bool OboeWrapper::StartStream(inputstreamer_t streamer) {
 }
 
 void OboeWrapper::CloseStream(inputstreamer_t streamer) {
+    CleanGarbageStreamers();
     if (streamer && streamer->stream) {
         streamer->stream->requestStop();
-        
-        std::this_thread::sleep_for(std::chrono::milliseconds(75));
-        
         streamer->stream->close();
         streamer->stream.reset();
+
+        // شیء کالبک صوتی را به صف زباله‌روب می‌فرستیم تا ۳ ثانیه زنده بماند و از کرش جلوگیری شود
+        std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
+        g_garbage_input_streamers.push_back({streamer, GETTIMESTAMP()});
     }
 }
 
@@ -421,6 +447,7 @@ void OboeOutputStreamer::onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::
 }
 
 outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int outputdeviceid, int sndgrpid, int samplerate, int channels, int framesize) {
+    CleanGarbageStreamers();
     bool useVoiceCom = (outputdeviceid & 0x10000) != 0;
     bool forceStereo = (outputdeviceid & 0x20000) != 0;
     bool hasSessionId = (outputdeviceid & 0x80000000) != 0;
@@ -517,13 +544,14 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
 }
 
 void OboeWrapper::CloseStream(outputstreamer_t streamer) {
+    CleanGarbageStreamers();
     if (streamer && streamer->stream) {
         streamer->stream->requestStop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(75));
-        
         streamer->stream->close();
         streamer->stream.reset();
-        MYTRACE(ACE_TEXT("Closed Oboe playback stream\n"));
+
+        std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
+        g_garbage_output_streamers.push_back({streamer, GETTIMESTAMP()});
     }
 }
 
