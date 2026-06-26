@@ -1338,6 +1338,18 @@ void ClientNode::StreamDuplexCb(const soundsystem::DuplexStreamer& streamer,
 }
 
 namespace teamtalk {
+    class BackgroundMicNotificationHandler : public ACE_Event_Handler {
+    private:
+        ClientNode* m_node;
+    public:
+        BackgroundMicNotificationHandler(ClientNode* node) : m_node(node) {}
+        int handle_exception(ACE_HANDLE) override {
+            m_node->UpdateBackgroundMicStateImpl();
+            delete this;
+            return 0;
+        }
+    };
+    
     SoundDeviceFeatures GetSoundDeviceFeatures(const SoundDeviceEffects& effects)
     {
         SoundDeviceFeatures features = SOUNDDEVICEFEATURE_NONE;
@@ -6292,8 +6304,9 @@ bool ClientNode::SetUserSoundFilter(int userid, const std::string& filter_str)
 }
 
 void ClientNode::UpdateBackgroundMicState() {
-    if (!TimerExists(TIMER_UPDATE_BACKGROUND_MIC)) {
-        StartTimer(TIMER_UPDATE_BACKGROUND_MIC, 0, ACE_Time_Value::zero);
+    BackgroundMicNotificationHandler* handler = new BackgroundMicNotificationHandler(this);
+    if (reactor()->notify(handler, ACE_Event_Handler::EXCEPT_MASK) < 0) {
+        delete handler;
     }
 }
 
