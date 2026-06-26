@@ -27,6 +27,23 @@ using namespace media;
 using namespace soundsystem;
 using namespace vidcap;
 
+static AudioCodec GetDefaultBackgroundCodec() {
+    AudioCodec codec;
+    codec.codec = CODEC_OPUS;
+    codec.opus.samplerate = 48000;
+    codec.opus.channels = 2; // Stereo
+    codec.opus.application = 2048; // OPUS_APPLICATION_VOIP
+    codec.opus.complexity = 10;
+    codec.opus.fec = true;
+    codec.opus.dtx = false;
+    codec.opus.bitrate = 64000;
+    codec.opus.vbr = true;
+    codec.opus.vbr_constraint = false;
+    codec.opus.frame_size = 960; // 20ms at 48000Hz is 960 samples
+    codec.opus.frames_per_packet = 1;
+    return codec;
+}
+
 #define GEN_NEXT_ID(id) (++(id) == 0 ? ++(id) : (id))
 #define GEN_NEXT_ID_MAX(id, max) ((id) + 1 > (max) ? (id) = 1 : (++(id) == 0 ? ++(id) : (id)))
 
@@ -6266,23 +6283,6 @@ bool ClientNode::SetUserSoundFilter(int userid, const std::string& filter_str)
         return true;
     }
     return false;
-}
-
-static teamtalk::AudioCodec GetDefaultBackgroundCodec() {
-    teamtalk::AudioCodec codec;
-    codec.codec = teamtalk::CODEC_OPUS;
-    codec.opus.samplerate = 48000;
-    codec.opus.channels = 2; // Stereo
-    codec.opus.application = 2048; // OPUS_APPLICATION_VOIP
-    codec.opus.complexity = 10;
-    codec.opus.fec = true;
-    codec.opus.dtx = false;
-    codec.opus.bitrate = 64000;
-    codec.opus.vbr = true;
-    codec.opus.vbr_constraint = false;
-    codec.opus.frame_size = 960; // 20ms at 48000Hz is 960 samples
-    codec.opus.frames_per_packet = 1;
-    return codec;
 }
 
 void ClientNode::UpdateBackgroundMicState() {
