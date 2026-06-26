@@ -1247,6 +1247,8 @@ void ClientNode::EncodedAudioFileFrame(const teamtalk::AudioCodec& codec,
 void ClientNode::StreamCaptureCb(const soundsystem::InputStreamer& /*streamer*/,
                                  const short* buffer, int n_samples)
 {
+        if ((m_flags & CLIENT_SNDINPUT_READY) == 0)
+        return;
     rguard_t const g_snd(LockSndprop());
 
     int const codec_samplerate = GetAudioCodecSampleRate(m_voice_thread.Codec());
@@ -1280,6 +1282,8 @@ void ClientNode::StreamDuplexCb(const soundsystem::DuplexStreamer& streamer,
                                     const short* input_buffer, 
                                     short* output_buffer, int n_samples)
 {
+    if ((m_flags & CLIENT_SNDINPUT_READY) == 0)
+        return;
     rguard_t const g_snd(LockSndprop());
 
     int const codec_samplerate = GetAudioCodecSampleRate(m_voice_thread.Codec());
@@ -4196,6 +4200,7 @@ void ClientNode::Disconnect()
 
     MYTRACE(ACE_TEXT("Disconnecting #%d.\n"), GetUserID());
 
+        m_flags &= ~CLIENT_SNDINPUT_READY;
         CloseAudioCapture();
     m_voice_thread.StopEncoder();
     
