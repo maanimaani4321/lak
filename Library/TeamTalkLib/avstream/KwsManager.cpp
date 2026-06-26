@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cmath>
+#include <atomic> // هدر اتمیک برای متغیرهای سبک و سریع
 
 extern "C" void TT_UpdateBackgroundMicAll();
 
@@ -26,13 +27,13 @@ static float g_speaker_verify_threshold = 0.5f;
 static std::vector<float> g_target_speaker_embedding;
 static std::vector<float> g_speaker_audio_buffer; // بافر لغزان ۳ ثانیه‌ای (۴۸۰۰۰ سمپل در فرکانس ۱۶ کیلوهرتز)
 
-// مدیریت ماشین وضعیت
+// مدیریت ماشین وضعیت با استفاده از نوع داده اتمیک سبک
 enum KwsState {
     STATE_KWS_ACTIVE,
     STATE_ENROLLMENT_ACTIVE,
     STATE_INACTIVE
 };
-static KwsState g_state = STATE_INACTIVE;
+static std::atomic<int> g_state{STATE_INACTIVE};
 static std::vector<float> g_enrollment_speech_buffer; // بافر جمع‌آوری صدای انسان برای تولید امضای صوتی
 
 static JavaVM* g_jvm = nullptr;
@@ -40,7 +41,9 @@ static jobject g_java_listener_ref = nullptr;
 static jmethodID g_callback_method_id = nullptr;
 static jmethodID g_enroll_callback_method_id = nullptr;
 static jmethodID g_recording_finished_method_id = nullptr;
-static bool g_active = false;
+
+// تغییر متغیرها به ساختار اتمیک جهت جلوگیری از قفل‌های سنگین در زمان ارزیابی وضعیت میکروفون
+static std::atomic<bool> g_active{false};
 static int g_current_samplerate = 0;
 static std::vector<float> g_mono_buffer;
 
@@ -208,8 +211,8 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 float speaker_verify_threshold,
                 const std::vector<float>& target_speaker_embedding)
 {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (g_active) return true;
+    // بررسی سریع وضعیت بدون نیاز به قفل کردن ملوتکس به جهت کاهش سربار مصرف پردازنده
+    if (g_active.load(std::memory_order_relaxed)) return true;
 
     if (!FileExists(encoder_path) || !FileExists(decoder_path) || !FileExists(joiner_path) ||
         !FileExists(tokens_path) || !FileExists(bpe_path) || !FileExists(keywords_path) || !FileExists(vad_path)) {
@@ -220,70 +223,103 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
         return false;
     }
 
-    try {
-        // ۱. مقداردهی اولیه VAD
-        SherpaOnnxVadModelConfig vad_config;
-        std::memset(&vad_config, 0, sizeof(vad_config));
-        vad_config.silero_vad.model = vad_path.c_str();
-        vad_config.silero_vad.threshold = vad_threshold; 
-        vad_config.silero_vad.min_silence_duration = 0.5f;
-        vad_config.silero_vad.min_speech_duration = 0.10f; 
-        vad_config.silero_vad.window_size = 512;
-        vad_config.silero_vad.max_speech_duration = 20.0f;
-        vad_config.sample_rate = 16000;
-        vad_config.num_threads = 1;
-        vad_config.provider = "cpu";
+    bool success = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        try {
+            // ۱. مقداردهی اولیه VAD
+            SherpaOnnxVadModelConfig vad_config;
+            std::memset(&vad_config, 0, sizeof(vad_config));
+            vad_config.silero_vad.model = vad_path.c_str();
+            vad_config.silero_vad.threshold = vad_threshold; 
+            vad_config.silero_vad.min_silence_duration = 0.5f;
+            vad_config.silero_vad.min_speech_duration = 0.10f; 
+            vad_config.silero_vad.window_size = 512;
+            vad_config.silero_vad.max_speech_duration = 20.0f;
+            vad_config.sample_rate = 16000;
+            vad_config.num_threads = 1;
+            vad_config.provider = "cpu";
 
-        g_vad = SherpaOnnxCreateVoiceActivityDetector(&vad_config, 10.0f);
-        if (!g_vad) {
-            return false;
-        }
+            g_vad = SherpaOnnxCreateVoiceActivityDetector(&vad_config, 10.0f);
+            if (!g_vad) {
+                return false;
+            }
 
-        // ۲. مقداردهی اولیه KeywordSpotter
-        SherpaOnnxKeywordSpotterConfig config;
-        std::memset(&config, 0, sizeof(config));
-        config.feat_config.sample_rate = 16000;
-        config.feat_config.feature_dim = 80;
-        config.model_config.transducer.encoder = encoder_path.c_str();
-        config.model_config.transducer.decoder = decoder_path.c_str();
-        config.model_config.transducer.joiner = joiner_path.c_str();
-        config.model_config.tokens = tokens_path.c_str();
-        config.model_config.bpe_vocab = bpe_path.c_str();
-        config.model_config.num_threads = 2; 
-        config.model_config.provider = "cpu";
-        config.model_config.model_type = "zipformer2"; 
-        config.keywords_file = keywords_path.c_str();
-        config.max_active_paths = 4;
-        config.keywords_score = 2.0f;
-        config.keywords_threshold = 0.15f;
+            // ۲. مقداردهی اولیه KeywordSpotter
+            SherpaOnnxKeywordSpotterConfig config;
+            std::memset(&config, 0, sizeof(config));
+            config.feat_config.sample_rate = 16000;
+            config.feat_config.feature_dim = 80;
+            config.model_config.transducer.encoder = encoder_path.c_str();
+            config.model_config.transducer.decoder = decoder_path.c_str();
+            config.model_config.transducer.joiner = joiner_path.c_str();
+            config.model_config.tokens = tokens_path.c_str();
+            config.model_config.bpe_vocab = bpe_path.c_str();
+            config.model_config.num_threads = 2; 
+            config.model_config.provider = "cpu";
+            config.model_config.model_type = "zipformer2"; 
+            config.keywords_file = keywords_path.c_str();
+            config.max_active_paths = 4;
+            config.keywords_score = 2.0f;
+            config.keywords_threshold = 0.15f;
 
-        g_spotter = SherpaOnnxCreateKeywordSpotter(&config);
-        if (!g_spotter) {
-            SherpaOnnxDestroyVoiceActivityDetector(g_vad);
-            g_vad = nullptr;
-            return false;
-        }
+            g_spotter = SherpaOnnxCreateKeywordSpotter(&config);
+            if (!g_spotter) {
+                SherpaOnnxDestroyVoiceActivityDetector(g_vad);
+                g_vad = nullptr;
+                return false;
+            }
 
-        g_stream = SherpaOnnxCreateKeywordStream(g_spotter);
-        if (!g_stream) {
-            SherpaOnnxDestroyKeywordSpotter(g_spotter);
-            SherpaOnnxDestroyVoiceActivityDetector(g_vad);
-            g_spotter = nullptr;
-            g_vad = nullptr;
-            return false;
-        }
+            g_stream = SherpaOnnxCreateKeywordStream(g_spotter);
+            if (!g_stream) {
+                SherpaOnnxDestroyKeywordSpotter(g_spotter);
+                SherpaOnnxDestroyVoiceActivityDetector(g_vad);
+                g_spotter = nullptr;
+                g_vad = nullptr;
+                return false;
+            }
 
-        // ۳. مقداردهی اولیه Speaker Embedding Extractor
-        if (!wespeaker_path.empty()) {
-            SherpaOnnxSpeakerEmbeddingExtractorConfig extractor_config;
-            std::memset(&extractor_config, 0, sizeof(extractor_config));
-            extractor_config.model = wespeaker_path.c_str();
-            extractor_config.num_threads = 1;
-            extractor_config.debug = 0;
-            extractor_config.provider = "cpu";
+            // ۳. مقداردهی اولیه Speaker Embedding Extractor
+            if (!wespeaker_path.empty()) {
+                SherpaOnnxSpeakerEmbeddingExtractorConfig extractor_config;
+                std::memset(&extractor_config, 0, sizeof(extractor_config));
+                extractor_config.model = wespeaker_path.c_str();
+                extractor_config.num_threads = 1;
+                extractor_config.debug = 0;
+                extractor_config.provider = "cpu";
 
-            g_speaker_extractor = SherpaOnnxCreateSpeakerEmbeddingExtractor(&extractor_config);
-            if (!g_speaker_extractor) {
+                g_speaker_extractor = SherpaOnnxCreateSpeakerEmbeddingExtractor(&extractor_config);
+                if (!g_speaker_extractor) {
+                    SherpaOnnxDestroyOnlineStream(g_stream);
+                    SherpaOnnxDestroyKeywordSpotter(g_spotter);
+                    SherpaOnnxDestroyVoiceActivityDetector(g_vad);
+                    g_stream = nullptr;
+                    g_spotter = nullptr;
+                    g_vad = nullptr;
+                    return false;
+                }
+            }
+
+            jclass clazz = env->GetObjectClass(jlistener);
+            g_callback_method_id = env->GetMethodID(clazz, "onKeywordDetected", "(Ljava/lang/String;)V");
+            
+            g_enroll_callback_method_id = env->GetMethodID(clazz, "onSpeakerEmbeddingExtracted", "([F)V");
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                g_enroll_callback_method_id = nullptr;
+            }
+
+            g_recording_finished_method_id = env->GetMethodID(clazz, "onVoiceRecordingFinished", "(Ljava/lang/String;I)V");
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                g_recording_finished_method_id = nullptr;
+            }
+
+            if (!g_callback_method_id) {
+                if (g_speaker_extractor) {
+                    SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
+                    g_speaker_extractor = nullptr;
+                }
                 SherpaOnnxDestroyOnlineStream(g_stream);
                 SherpaOnnxDestroyKeywordSpotter(g_spotter);
                 SherpaOnnxDestroyVoiceActivityDetector(g_vad);
@@ -292,126 +328,119 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 g_vad = nullptr;
                 return false;
             }
-        }
 
-        jclass clazz = env->GetObjectClass(jlistener);
-        g_callback_method_id = env->GetMethodID(clazz, "onKeywordDetected", "(Ljava/lang/String;)V");
-        
-        g_enroll_callback_method_id = env->GetMethodID(clazz, "onSpeakerEmbeddingExtracted", "([F)V");
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            g_enroll_callback_method_id = nullptr;
-        }
+            g_java_listener_ref = env->NewGlobalRef(jlistener);
+            g_speaker_verify_enabled = speaker_verify_enabled;
+            g_speaker_verify_threshold = speaker_verify_threshold;
+            g_target_speaker_embedding = target_speaker_embedding;
 
-        g_recording_finished_method_id = env->GetMethodID(clazz, "onVoiceRecordingFinished", "(Ljava/lang/String;I)V");
-        if (env->ExceptionCheck()) {
-            env->ExceptionClear();
-            g_recording_finished_method_id = nullptr;
-        }
+            g_current_samplerate = 0;
+            g_silence_samples_counter = 56000; 
+            g_kws_pipe_reset_done = true;
+            g_pre_roll_buffer.clear();
+            g_vad_buffer.clear();
+            g_speaker_audio_buffer.clear();
+            g_enrollment_speech_buffer.clear();
 
-        if (!g_callback_method_id) {
+            // تنظیم مقادیر اتمیک در انتهای فرآیند بالا آمدن منابع صوتی موتور ONNX
+            g_active.store(true, std::memory_order_release);
+            g_state.store(STATE_KWS_ACTIVE, std::memory_order_release);
+            success = true;
+        } catch (...) {
             if (g_speaker_extractor) {
                 SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
                 g_speaker_extractor = nullptr;
             }
-            SherpaOnnxDestroyOnlineStream(g_stream);
-            SherpaOnnxDestroyKeywordSpotter(g_spotter);
-            SherpaOnnxDestroyVoiceActivityDetector(g_vad);
+            if (g_stream) SherpaOnnxDestroyOnlineStream(g_stream);
+            if (g_spotter) SherpaOnnxDestroyKeywordSpotter(g_spotter);
+            if (g_vad) SherpaOnnxDestroyVoiceActivityDetector(g_vad);
             g_stream = nullptr;
             g_spotter = nullptr;
             g_vad = nullptr;
             return false;
         }
-
-        g_java_listener_ref = env->NewGlobalRef(jlistener);
-        g_active = true;
-        g_state = STATE_KWS_ACTIVE;
-        g_speaker_verify_enabled = speaker_verify_enabled;
-        g_speaker_verify_threshold = speaker_verify_threshold;
-        g_target_speaker_embedding = target_speaker_embedding;
-
-        g_current_samplerate = 0;
-        g_silence_samples_counter = 56000; 
-        g_kws_pipe_reset_done = true;
-        g_pre_roll_buffer.clear();
-        g_vad_buffer.clear();
-        g_speaker_audio_buffer.clear();
-        g_enrollment_speech_buffer.clear();
-        TT_UpdateBackgroundMicAll();
-
-        return true;
-    } catch (...) {
-        if (g_speaker_extractor) {
-            SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
-            g_speaker_extractor = nullptr;
-        }
-        if (g_stream) SherpaOnnxDestroyOnlineStream(g_stream);
-        if (g_spotter) SherpaOnnxDestroyKeywordSpotter(g_spotter);
-        if (g_vad) SherpaOnnxDestroyVoiceActivityDetector(g_vad);
-        g_stream = nullptr;
-        g_spotter = nullptr;
-        g_vad = nullptr;
-        return false;
     }
+
+    // خروج از محدوده قفل بالا قبل از اطلاع‌رسانی به هسته جهت ممانعت قاطع از Deadlock
+    if (success) {
+        TT_UpdateBackgroundMicAll();
+    }
+    return success;
 }
 
 bool KwsStartSpeakerEnrollment(JNIEnv* env) {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (!g_active || !g_speaker_extractor) return false;
-    g_state = STATE_ENROLLMENT_ACTIVE;
-    g_enrollment_speech_buffer.clear();
-    TT_UpdateBackgroundMicAll();
+    bool success = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        if (!g_active.load(std::memory_order_relaxed) || !g_speaker_extractor) return false;
+        g_state.store(STATE_ENROLLMENT_ACTIVE, std::memory_order_release);
+        g_enrollment_speech_buffer.clear();
+        success = true;
+    }
+    if (success) {
+        TT_UpdateBackgroundMicAll();
+    }
     return true;
 }
 
 void KwsStop(JNIEnv* env) {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    if (!g_active) return;
+    bool was_active = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        if (!g_active.load(std::memory_order_relaxed)) return;
 
-    g_active = false;
-    g_state = STATE_INACTIVE;
-    
-    if (g_stream) {
-        SherpaOnnxDestroyOnlineStream(g_stream);
-        g_stream = nullptr;
-    }   
-    if (g_spotter) {
-        SherpaOnnxDestroyKeywordSpotter(g_spotter);
-        g_spotter = nullptr;
-    }  
-    if (g_vad) {
-        SherpaOnnxDestroyVoiceActivityDetector(g_vad);
-        g_vad = nullptr;
-    }      
-    if (g_resampler) {
-        SherpaOnnxDestroyLinearResampler(g_resampler);
-        g_resampler = nullptr;
-    }
-    if (g_speaker_extractor) {
-        SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
-        g_speaker_extractor = nullptr;
-    }
-    
-    g_mono_buffer.clear();
-    g_pre_roll_buffer.clear();
-    g_vad_buffer.clear();
-    g_speaker_audio_buffer.clear();
-    g_enrollment_speech_buffer.clear();
-    g_target_speaker_embedding.clear();
+        g_active.store(false, std::memory_order_release);
+        g_state.store(STATE_INACTIVE, std::memory_order_release);
+        
+        if (g_stream) {
+            SherpaOnnxDestroyOnlineStream(g_stream);
+            g_stream = nullptr;
+        }   
+        if (g_spotter) {
+            SherpaOnnxDestroyKeywordSpotter(g_spotter);
+            g_spotter = nullptr;
+        }  
+        if (g_vad) {
+            SherpaOnnxDestroyVoiceActivityDetector(g_vad);
+            g_vad = nullptr;
+        }      
+        if (g_resampler) {
+            SherpaOnnxDestroyLinearResampler(g_resampler);
+            g_resampler = nullptr;
+        }
+        if (g_speaker_extractor) {
+            SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
+            g_speaker_extractor = nullptr;
+        }
+        
+        g_mono_buffer.clear();
+        g_pre_roll_buffer.clear();
+        g_vad_buffer.clear();
+        g_speaker_audio_buffer.clear();
+        g_enrollment_speech_buffer.clear();
+        g_target_speaker_embedding.clear();
 
-    if (g_java_listener_ref && env) {
-        env->DeleteGlobalRef(g_java_listener_ref);
-        g_java_listener_ref = nullptr;
+        if (g_java_listener_ref && env) {
+            env->DeleteGlobalRef(g_java_listener_ref);
+            g_java_listener_ref = nullptr;
+        }
+        g_callback_method_id = nullptr;
+        g_enroll_callback_method_id = nullptr;
+        was_active = true;
     }
-    g_callback_method_id = nullptr;
-    g_enroll_callback_method_id = nullptr;
-    TT_UpdateBackgroundMicAll();
+
+    if (was_active) {
+        TT_UpdateBackgroundMicAll();
+    }
 }
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
+    // بهینه‌سازی بسیار سبک: اگر کلید استارت کلاینت زده نشده، فورا خارج شو بدون اینکه قفل گارد سنگین بگیری
+    if (!g_active.load(std::memory_order_relaxed)) return;
+
     try {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
-        if (!g_active || !g_stream || !g_spotter || !g_vad) return;
+        if (!g_active.load() || !g_stream || !g_spotter || !g_vad) return;
 
         // تبدیل کانال‌ها و نرمال‌سازی سیگنال صدا
         g_mono_buffer.resize(samples);
@@ -457,9 +486,10 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             bool speech_detected_now = (SherpaOnnxVoiceActivityDetectorDetected(g_vad) == 1);
 
             // حالت اول: دتکشن کلمات فعال است (KWS MODE)
-            if (g_state == STATE_KWS_ACTIVE) {
+            int current_state = g_state.load(std::memory_order_relaxed);
+            if (current_state == STATE_KWS_ACTIVE) {
                 
-                // مدیریت بافرینگ مداوم ۳ ثانیه آخر صدا جهت تایید هویت در صورت دتکت کلمه کلیدی
+                // مدیریت بافرینگ مداوم ۳ ثانیه آخر صدا جهت تایید هویت در صورت دتکشن کلمه کلیدی
                 g_speaker_audio_buffer.insert(g_speaker_audio_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
                 if (g_speaker_audio_buffer.size() > 48000) {
                     g_speaker_audio_buffer.erase(g_speaker_audio_buffer.begin(), g_speaker_audio_buffer.end() - 48000);
@@ -525,7 +555,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                 }
             }
             // حالت دوم: استخراج نمونه امضای صوتی گوینده فعال است (ENROLLMENT MODE)
-            else if (g_state == STATE_ENROLLMENT_ACTIVE) {
+            else if (current_state == STATE_ENROLLMENT_ACTIVE) {
                 // اگر صدای انسان توسط VAD تشخیص داده شد، نمونه‌ها را در بافر ثبت امضای صوتی ذخیره کن
                 if (speech_detected_now) {
                     g_enrollment_speech_buffer.insert(g_enrollment_speech_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
@@ -534,7 +564,8 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                     if (g_enrollment_speech_buffer.size() >= 48000) {
                         ExtractAndNotifyEnrollmentEmbedding(g_enrollment_speech_buffer);
                         g_enrollment_speech_buffer.clear();
-                        g_state = STATE_KWS_ACTIVE; // بازگشت اتوماتیک به لوله دتکتور کلمه کلیدی
+                        g_state.store(STATE_KWS_ACTIVE, std::memory_order_release); // بازگشت اتوماتیک به لوله دتکتور کلمه کلیدی
+                        TT_UpdateBackgroundMicAll();
                     }
                 }
             }
@@ -553,7 +584,7 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
 static std::unique_ptr<OpusEncFile> g_assistantEncoder = nullptr;
 static std::shared_ptr<AudioResampler> g_assistantResampler = nullptr;
 static std::vector<short> g_assistantFifo;
-static bool g_assistantActive = false;
+static std::atomic<bool> g_assistantActive{false};
 static std::string g_assistantFile;
 static int g_assistantRemainingSamples = 0;
 static bool g_assistantSendToTT = true;
@@ -561,7 +592,7 @@ static bool g_assistantSendToTT = true;
 static std::unique_ptr<OpusEncFile> g_messageEncoder = nullptr;
 static std::shared_ptr<AudioResampler> g_messageResampler = nullptr;
 static std::vector<short> g_messageFifo;
-static bool g_messageActive = false;
+static std::atomic<bool> g_messageActive{false};
 static std::string g_messageFile;
 static bool g_messageSendToTT = true;
 
@@ -590,18 +621,26 @@ static void NotifyVoiceRecordingFinished(const std::string& filepath, int type) 
 }
 
 static void StopAssistant() {
-    if (g_assistantActive) {
-        g_assistantActive = false;
-        if (g_assistantEncoder) {
-            if (!g_assistantFifo.empty()) {
-                g_assistantFifo.resize(960, 0);
-                g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
+    bool was_active = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(g_mutex);
+        if (g_assistantActive.load(std::memory_order_relaxed)) {
+            g_assistantActive.store(false, std::memory_order_release);
+            if (g_assistantEncoder) {
+                if (!g_assistantFifo.empty()) {
+                    g_assistantFifo.resize(960, 0);
+                    g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
+                }
+                g_assistantEncoder->Close();
+                g_assistantEncoder.reset();
             }
-            g_assistantEncoder->Close();
-            g_assistantEncoder.reset();
+            g_assistantResampler.reset();
+            g_assistantFifo.clear();
+            was_active = true;
         }
-        g_assistantResampler.reset();
-        g_assistantFifo.clear();
+    }
+
+    if (was_active) {
         NotifyVoiceRecordingFinished(g_assistantFile, 1);
         TT_UpdateBackgroundMicAll();
     }
@@ -615,86 +654,127 @@ VoiceFeaturesManager& VoiceFeaturesManager::Instance() {
 VoiceFeaturesManager::VoiceFeaturesManager() {}
 
 bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, int durationSeconds, bool sendToTeamTalk) {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (g_assistantActive) {
-        StopAssistant();
+    bool success = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (g_assistantActive.load(std::memory_order_relaxed)) {
+            g_assistantActive.store(false, std::memory_order_release);
+            if (g_assistantEncoder) {
+                if (!g_assistantFifo.empty()) {
+                    g_assistantFifo.resize(960, 0);
+                    g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
+                }
+                g_assistantEncoder->Close();
+                g_assistantEncoder.reset();
+            }
+            g_assistantResampler.reset();
+            g_assistantFifo.clear();
+            NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        }
+
+        g_assistantEncoder = std::make_unique<OpusEncFile>();
+        
+        #if defined(UNICODE)
+            ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
+        #else
+            ACE_TString t_filename = outputFile.c_str();
+        #endif
+
+        int target_samplerate = 48000;
+        int framesize = 960;
+        int target_bitrate = 48000;
+
+        if (!g_assistantEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
+            g_assistantEncoder.reset();
+            return false;
+        }
+        g_assistantEncoder->GetEncoder().SetBitrate(target_bitrate);
+
+        g_assistantFile = outputFile;
+        g_assistantRemainingSamples = durationSeconds * target_samplerate;
+        g_assistantSendToTT = sendToTeamTalk;
+        g_assistantFifo.clear();
+        g_assistantActive.store(true, std::memory_order_release);
+        success = true;
     }
 
-    g_assistantEncoder = std::make_unique<OpusEncFile>();
-    
-    #if defined(UNICODE)
-        ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
-    #else
-        ACE_TString t_filename = outputFile.c_str();
-    #endif
-
-    int target_samplerate = 48000;
-    int framesize = 960;
-    int target_bitrate = 48000;
-
-    if (!g_assistantEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
-        g_assistantEncoder.reset();
-        return false;
+    if (success) {
+        TT_UpdateBackgroundMicAll();
     }
-    g_assistantEncoder->GetEncoder().SetBitrate(target_bitrate);
-
-    g_assistantFile = outputFile;
-    g_assistantRemainingSamples = durationSeconds * target_samplerate;
-    g_assistantSendToTT = sendToTeamTalk;
-    g_assistantFifo.clear();
-    g_assistantActive = true;
-
-    TT_UpdateBackgroundMicAll();
     return true;
 }
 
 bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk) {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (g_messageActive) {
-        StopVoiceMessage();
+    bool success = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (g_messageActive.load(std::memory_order_relaxed)) {
+            g_messageActive.store(false, std::memory_order_release);
+            if (g_messageEncoder) {
+                if (!g_messageFifo.empty()) {
+                    g_messageFifo.resize(320, 0);
+                    g_messageEncoder->Encode(g_messageFifo.data(), 320, true);
+                }
+                g_messageEncoder->Close();
+                g_messageEncoder.reset();
+            }
+            g_messageResampler.reset();
+            g_messageFifo.clear();
+            NotifyVoiceRecordingFinished(g_messageFile, 2);
+        }
+
+        g_messageEncoder = std::make_unique<OpusEncFile>();
+        
+        #if defined(UNICODE)
+            ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
+        #else
+            ACE_TString t_filename = outputFile.c_str();
+        #endif
+
+        int target_samplerate = 16000;
+        int framesize = 320;
+        int target_bitrate = 16000;
+
+        if (!g_messageEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
+            g_messageEncoder.reset();
+            return false;
+        }
+        g_messageEncoder->GetEncoder().SetBitrate(target_bitrate);
+
+        g_messageFile = outputFile;
+        g_messageSendToTT = sendToTeamTalk;
+        g_messageFifo.clear();
+        g_messageActive.store(true, std::memory_order_release);
+        success = true;
     }
 
-    g_messageEncoder = std::make_unique<OpusEncFile>();
-    
-    #if defined(UNICODE)
-        ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
-    #else
-        ACE_TString t_filename = outputFile.c_str();
-    #endif
-
-    int target_samplerate = 16000;
-    int framesize = 320;
-    int target_bitrate = 16000;
-
-    if (!g_messageEncoder->Open(t_filename, 1, target_samplerate, framesize, OPUS_APPLICATION_VOIP)) {
-        g_messageEncoder.reset();
-        return false;
+    if (success) {
+        TT_UpdateBackgroundMicAll();
     }
-    g_messageEncoder->GetEncoder().SetBitrate(target_bitrate);
-
-    g_messageFile = outputFile;
-    g_messageSendToTT = sendToTeamTalk;
-    g_messageFifo.clear();
-    g_messageActive = true;
-    TT_UpdateBackgroundMicAll();
-
     return true;
 }
 
 bool VoiceFeaturesManager::StopVoiceMessage() {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (g_messageActive) {
-        g_messageActive = false;
-        if (g_messageEncoder) {
-            if (!g_messageFifo.empty()) {
-                g_messageFifo.resize(320, 0);
-                g_messageEncoder->Encode(g_messageFifo.data(), 320, true);
+    bool success = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (g_messageActive.load(std::memory_order_relaxed)) {
+            g_messageActive.store(false, std::memory_order_release);
+            if (g_messageEncoder) {
+                if (!g_messageFifo.empty()) {
+                    g_messageFifo.resize(320, 0);
+                    g_messageEncoder->Encode(g_messageFifo.data(), 320, true);
+                }
+                g_messageEncoder->Close();
+                g_messageEncoder.reset();
             }
-            g_messageEncoder->Close();
-            g_messageEncoder.reset();
+            g_messageResampler.reset();
+            g_messageFifo.clear();
+            success = true;
         }
-        g_messageResampler.reset();
-        g_messageFifo.clear();
+    }
+
+    if (success) {
         NotifyVoiceRecordingFinished(g_messageFile, 2);
         TT_UpdateBackgroundMicAll();
         return true;
@@ -703,82 +783,97 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
 }
 
 void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (!g_assistantActive && !g_messageActive) return;
+    // گارد سبک اتمیک جهت جلوگیری از قفل شدن نخ پردازش صوتی میکروفون
+    if (!g_assistantActive.load(std::memory_order_relaxed) && !g_messageActive.load(std::memory_order_relaxed)) return;
 
-    if (g_assistantActive && g_assistantEncoder) {
-        int samples_to_encode = frame.input_samples;
-        const short* pcm_ptr = frame.input_buffer;
-        std::vector<short> resampled_buf;
+    bool assistant_finished = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (g_assistantActive.load(std::memory_order_relaxed) && g_assistantEncoder) {
+            int samples_to_encode = frame.input_samples;
+            const short* pcm_ptr = frame.input_buffer;
+            std::vector<short> resampled_buf;
 
-        media::AudioFormat target_fmt(48000, 1);
-        if (frame.inputfmt != target_fmt) {
-            if (!g_assistantResampler || g_assistantResampler->GetInputFormat() != frame.inputfmt) {
-                g_assistantResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
+            media::AudioFormat target_fmt(48000, 1);
+            if (frame.inputfmt != target_fmt) {
+                if (!g_assistantResampler || g_assistantResampler->GetInputFormat() != frame.inputfmt) {
+                    g_assistantResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
+                }
+                if (g_assistantResampler) {
+                    int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 48000);
+                    resampled_buf.resize(out_samples);
+                    int res = g_assistantResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
+                    if (res > 0) {
+                        pcm_ptr = resampled_buf.data();
+                        samples_to_encode = res;
+                    }
+                }
             }
-            if (g_assistantResampler) {
-                int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 48000);
-                resampled_buf.resize(out_samples);
-                int res = g_assistantResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
-                if (res > 0) {
-                    pcm_ptr = resampled_buf.data();
-                    samples_to_encode = res;
+
+            g_assistantFifo.insert(g_assistantFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
+            while (g_assistantFifo.size() >= 960) {
+                g_assistantRemainingSamples -= 960;
+                bool last = (g_assistantRemainingSamples <= 0);
+                g_assistantEncoder->Encode(g_assistantFifo.data(), 960, last);
+                g_assistantFifo.erase(g_assistantFifo.begin(), g_assistantFifo.begin() + 960);
+                
+                if (last) {
+                    g_assistantActive.store(false, std::memory_order_release);
+                    if (g_assistantEncoder) {
+                        g_assistantEncoder->Close();
+                        g_assistantEncoder.reset();
+                    }
+                    g_assistantResampler.reset();
+                    g_assistantFifo.clear();
+                    assistant_finished = true;
+                    break;
                 }
             }
         }
 
-        g_assistantFifo.insert(g_assistantFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
-        while (g_assistantFifo.size() >= 960) {
-            g_assistantRemainingSamples -= 960;
-            bool last = (g_assistantRemainingSamples <= 0);
-            g_assistantEncoder->Encode(g_assistantFifo.data(), 960, last);
-            g_assistantFifo.erase(g_assistantFifo.begin(), g_assistantFifo.begin() + 960);
-            
-            if (last) {
-                StopAssistant();
-                break;
+        if (g_messageActive.load(std::memory_order_relaxed) && g_messageEncoder) {
+            int samples_to_encode = frame.input_samples;
+            const short* pcm_ptr = frame.input_buffer;
+            std::vector<short> resampled_buf;
+
+            media::AudioFormat target_fmt(16000, 1);
+            if (frame.inputfmt != target_fmt) {
+                if (!g_messageResampler || g_messageResampler->GetInputFormat() != frame.inputfmt) {
+                    g_messageResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
+                }
+                if (g_messageResampler) {
+                    int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 16000);
+                    resampled_buf.resize(out_samples);
+                    int res = g_messageResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
+                    if (res > 0) {
+                        pcm_ptr = resampled_buf.data();
+                        samples_to_encode = res;
+                    }
+                }
+            }
+
+            g_messageFifo.insert(g_messageFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
+            while (g_messageFifo.size() >= 320) {
+                g_messageEncoder->Encode(g_messageFifo.data(), 320, false);
+                g_messageFifo.erase(g_messageFifo.begin(), g_messageFifo.begin() + 320);
             }
         }
     }
 
-    if (g_messageActive && g_messageEncoder) {
-        int samples_to_encode = frame.input_samples;
-        const short* pcm_ptr = frame.input_buffer;
-        std::vector<short> resampled_buf;
-
-        media::AudioFormat target_fmt(16000, 1);
-        if (frame.inputfmt != target_fmt) {
-            if (!g_messageResampler || g_messageResampler->GetInputFormat() != frame.inputfmt) {
-                g_messageResampler = MakeAudioResampler(frame.inputfmt, target_fmt);
-            }
-            if (g_messageResampler) {
-                int out_samples = CalcSamples(frame.inputfmt.samplerate, frame.input_samples, 16000);
-                resampled_buf.resize(out_samples);
-                int res = g_messageResampler->Resample(frame.input_buffer, frame.input_samples, resampled_buf.data(), out_samples);
-                if (res > 0) {
-                    pcm_ptr = resampled_buf.data();
-                    samples_to_encode = res;
-                }
-            }
-        }
-
-        g_messageFifo.insert(g_messageFifo.end(), pcm_ptr, pcm_ptr + samples_to_encode);
-        while (g_messageFifo.size() >= 320) {
-            g_messageEncoder->Encode(g_messageFifo.data(), 320, false);
-            g_messageFifo.erase(g_messageFifo.begin(), g_messageFifo.begin() + 320);
-        }
+    if (assistant_finished) {
+        NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        TT_UpdateBackgroundMicAll();
     }
 }
 
 bool VoiceFeaturesManager::ShouldSendToTeamTalk() {
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    if (g_assistantActive && !g_assistantSendToTT) return false;
-    if (g_messageActive && !g_messageSendToTT) return false;
-    return true;
+    return g_assistantSendToTT && g_messageSendToTT;
 }
 
 bool IsBackgroundMicRequired() {
-    std::lock_guard<std::recursive_mutex> lock(g_mutex);
-    return g_active || g_assistantActive || g_messageActive || (g_state == STATE_ENROLLMENT_ACTIVE);
+    return g_active.load(std::memory_order_relaxed) || 
+           g_assistantActive.load(std::memory_order_relaxed) || 
+           g_messageActive.load(std::memory_order_relaxed) || 
+           (g_state.load(std::memory_order_relaxed) == STATE_ENROLLMENT_ACTIVE);
 }
 }
