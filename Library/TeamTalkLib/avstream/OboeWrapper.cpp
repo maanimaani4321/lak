@@ -300,12 +300,7 @@ bool OboeWrapper::StartStream(inputstreamer_t streamer) {
 
 void OboeWrapper::CloseStream(inputstreamer_t streamer) {
     if (streamer && streamer->stream) {
-        streamer->stream->swapDataCallback(nullptr);
-        streamer->stream->swapErrorCallback(nullptr);
-
         streamer->stream->requestStop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
         streamer->stream->close();
         streamer->stream.reset();
     }
@@ -521,12 +516,7 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
 
 void OboeWrapper::CloseStream(outputstreamer_t streamer) {
     if (streamer && streamer->stream) {
-        streamer->stream->swapDataCallback(nullptr);
-        streamer->stream->swapErrorCallback(nullptr);
-
         streamer->stream->requestStop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
         streamer->stream->close();
         streamer->stream.reset();
         MYTRACE(ACE_TEXT("Closed Oboe playback stream\n"));

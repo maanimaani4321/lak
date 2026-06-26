@@ -4485,13 +4485,4 @@ TEAMTALKDLL_API TTBOOL TT_GetSoundInputFilter(IN TTInstance* lpTTInstance, OUT T
 #endif
     return TRUE;
 }
-
-    TEAMTALKDLL_API void TT_UpdateOfflineAudioCapture() {
-        std::lock_guard<std::mutex> const g(clients_mutex);
-        for (auto& c : clients) {
-            if (c && c->clientnode) {
-                c->clientnode->UpdateOfflineCaptureState();
-            }
-        }
-    }
 }
