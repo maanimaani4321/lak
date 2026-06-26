@@ -562,6 +562,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
         }
     }
 
+        teamtalk::KwsProcessAudio(audblock.input_buffer, audblock.input_samples, audblock.inputfmt.channels, audblock.inputfmt.samplerate);
 teamtalk::VoiceFeaturesManager::Instance().FeedAudio(audblock);
 if (!teamtalk::VoiceFeaturesManager::Instance().ShouldSendToTeamTalk()) {
         std::memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));

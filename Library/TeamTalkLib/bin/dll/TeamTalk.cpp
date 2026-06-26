@@ -4485,4 +4485,13 @@ TEAMTALKDLL_API TTBOOL TT_GetSoundInputFilter(IN TTInstance* lpTTInstance, OUT T
 #endif
     return TRUE;
 }
+
+    TEAMTALKDLL_API void TT_UpdateBackgroundMicAll() {
+        std::lock_guard<std::mutex> const g(clients_mutex);
+        for (auto& inst : clients) {
+            if (inst && inst->clientnode) {
+                inst->clientnode->UpdateBackgroundMicState();
+            }
+        }
+    }
 }

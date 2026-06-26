@@ -10339,7 +10339,6 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     short* pcmData = static_cast<short*>(audioData);
     int totalIncomingSamples = numFrames * channels;
     int requiredSamples = framesize * channels;
-    teamtalk::KwsProcessAudio(pcmData, numFrames, channels, samplerate);
 
     if (fifo_size + totalIncomingSamples <= fifo_capacity) {
         std::memcpy(&fifo_buffer[fifo_size], pcmData, totalIncomingSamples * sizeof(short));
@@ -64007,6 +64006,7 @@ void AudioThread::ProcessAudioFrame(media::AudioFrame& audblock)
         }
     }
 
+        teamtalk::KwsProcessAudio(audblock.input_buffer, audblock.input_samples, audblock.inputfmt.channels, audblock.inputfmt.samplerate);
 teamtalk::VoiceFeaturesManager::Instance().FeedAudio(audblock);
 if (!teamtalk::VoiceFeaturesManager::Instance().ShouldSendToTeamTalk()) {
         std::memset(audblock.input_buffer, 0, audblock.input_samples * audblock.inputfmt.channels * sizeof(short));
@@ -64387,7 +64387,6 @@ public:
     void SetForceMono(bool enable) { m_force_mono = enable; }
 bool GetForceMono() const { return m_force_mono; }
     AudioThread();
-    size_t thr_count() const { return ACE_Task<ACE_MT_SYNCH>::thr_count(); }
     void SetFFmpegFilter(const std::string& filter_str);
     std::string GetFFmpegFilter() {
     std::unique_lock<std::recursive_mutex> const g(m_preprocess_lock);

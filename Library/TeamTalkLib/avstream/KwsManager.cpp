@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cmath>
 
+extern "C" void TT_UpdateBackgroundMicAll();
+
 namespace teamtalk {
 
 static std::recursive_mutex g_mutex;
@@ -335,6 +337,7 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
         g_vad_buffer.clear();
         g_speaker_audio_buffer.clear();
         g_enrollment_speech_buffer.clear();
+        TT_UpdateBackgroundMicAll();
 
         return true;
     } catch (...) {
@@ -357,6 +360,7 @@ bool KwsStartSpeakerEnrollment(JNIEnv* env) {
     if (!g_active || !g_speaker_extractor) return false;
     g_state = STATE_ENROLLMENT_ACTIVE;
     g_enrollment_speech_buffer.clear();
+    TT_UpdateBackgroundMicAll();
     return true;
 }
 
@@ -401,6 +405,7 @@ void KwsStop(JNIEnv* env) {
     }
     g_callback_method_id = nullptr;
     g_enroll_callback_method_id = nullptr;
+    TT_UpdateBackgroundMicAll();
 }
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
@@ -598,6 +603,7 @@ static void StopAssistant() {
         g_assistantResampler.reset();
         g_assistantFifo.clear();
         NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        TT_UpdateBackgroundMicAll();
     }
 }
 
@@ -638,6 +644,7 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
     g_assistantFifo.clear();
     g_assistantActive = true;
 
+    TT_UpdateBackgroundMicAll();
     return true;
 }
 
@@ -669,6 +676,7 @@ bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool
     g_messageSendToTT = sendToTeamTalk;
     g_messageFifo.clear();
     g_messageActive = true;
+    TT_UpdateBackgroundMicAll();
 
     return true;
 }
@@ -688,6 +696,7 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
         g_messageResampler.reset();
         g_messageFifo.clear();
         NotifyVoiceRecordingFinished(g_messageFile, 2);
+        TT_UpdateBackgroundMicAll();
         return true;
     }
     return false;
@@ -766,5 +775,10 @@ bool VoiceFeaturesManager::ShouldSendToTeamTalk() {
     if (g_assistantActive && !g_assistantSendToTT) return false;
     if (g_messageActive && !g_messageSendToTT) return false;
     return true;
+}
+
+bool IsBackgroundMicRequired() {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    return g_active || g_assistantActive || g_messageActive || (g_state == STATE_ENROLLMENT_ACTIVE);
 }
 }

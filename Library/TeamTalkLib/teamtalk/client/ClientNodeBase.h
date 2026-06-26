@@ -69,6 +69,7 @@ namespace teamtalk {
         TIMER_STOP_AUDIOINPUT                   = 12,
         TIMER_REMOVE_LOCALPLAYBACK              = 13,
         TIMER_STOP_STREAM_MEDIAFILE_ID          = 14,
+        TIMER_UPDATE_BACKGROUND_MIC             = 15,
 
         //User instance timers (termination not handled by ClientNode::StopTimer())
         USER_TIMER_MASK                         = USER_TIMER_START,

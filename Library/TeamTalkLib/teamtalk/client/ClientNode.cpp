@@ -3,6 +3,7 @@
 #include "myace/MyACE.h"
 #include "myace/MyINet.h"
 #include "mystd/MyStd.h"
+#include "avstream/KwsManager.h"
 #include "teamtalk/CodecCommon.h"
 #include "teamtalk/DesktopSession.h"
 #include "teamtalk/TTAssert.h"
@@ -71,6 +72,7 @@ ClientNode::ClientNode(const ACE_TString& version, ClientListener* listener)
 
 ClientNode::~ClientNode()
 {
+    m_is_destroying = true;
     {
         //guard needed for disconnect since Logout and LeaveChannel are called
         GUARD_REACTOR(this);
@@ -83,6 +85,7 @@ ClientNode::~ClientNode()
         CloseSoundInputDevice();
         CloseSoundOutputDevice();
         CloseSoundDuplexDevices();
+        m_voice_thread.StopEncoder();
     }
 
     m_soundsystem->RemoveSoundGroup(m_soundprop.soundgroupid);
@@ -446,6 +449,11 @@ int ClientNode::TimerEvent(ACE_UINT32 timer_event_id, long userdata)
             ret = 0;
         }
         break;
+
+        case TIMER_UPDATE_BACKGROUND_MIC :
+            UpdateBackgroundMicStateImpl();
+            return -1; // Single shot
+
     case USER_TIMER_VOICE_PLAYBACK_ID :
     {
         clientuser_t const user = GetUser(userid);
@@ -2764,6 +2772,11 @@ bool ClientNode::CloseSoundInputDevice()
 
     CloseAudioCapture();
 
+    if (m_mychannel.get() == nullptr)
+    {
+        m_voice_thread.StopEncoder();
+    }
+
     rguard_t g_snd(LockSndprop());
     m_soundprop.inputdeviceid = SOUNDDEVICE_IGNORE_ID;
     g_snd.release();
@@ -2801,6 +2814,11 @@ bool ClientNode::CloseSoundDuplexDevices()
 
     //shutdown cature
     CloseAudioCapture();
+
+    if (m_mychannel.get() == nullptr)
+    {
+        m_voice_thread.StopEncoder();
+    }
 
     rguard_t g_snd(LockSndprop());
     m_soundprop.inputdeviceid = SOUNDDEVICE_IGNORE_ID;
@@ -4238,6 +4256,11 @@ void ClientNode::JoinChannel(clientchannel_t& chan)
 
     if (m_mychannel)
         LeftChannel(*m_mychannel);
+    else if (teamtalk::IsBackgroundMicRequired()) {
+        CloseAudioCapture();
+        m_voice_thread.StopEncoder();
+        m_flags &= ~CLIENT_SNDINPUT_READY;
+    }
 
     m_mychannel = chan;
 
@@ -4305,11 +4328,24 @@ void ClientNode::LeftChannel(ClientChannel& chan)
     for(const auto & user : users)
         user->ResetAllStreams();
 
-    //shutdown audio capture
-    if(chan.GetAudioCodec().codec != CODEC_NO_CODEC)
+    // If background recording/awake is needed, keep the mic running using default codec
+    if (teamtalk::IsBackgroundMicRequired() && !m_is_destroying) {
         CloseAudioCapture();
-
-    m_voice_thread.StopEncoder();
+        m_voice_thread.StopEncoder();
+        
+        AudioCodec bg_codec = GetDefaultBackgroundCodec();
+        auto cbenc = [this](auto && PH1, auto && PH2, auto && PH3, auto && PH4, auto && PH5) { 
+            EncodedAudioVoiceFrame(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), std::forward<decltype(PH3)>(PH3), std::forward<decltype(PH4)>(PH4), std::forward<decltype(PH5)>(PH5)); 
+        };
+        m_voice_thread.StartEncoder(cbenc, bg_codec, true);
+        m_flags |= CLIENT_SNDINPUT_READY;
+        OpenAudioCapture(bg_codec);
+        MYTRACE(ACE_TEXT("LeftChannel: Switched to default Background Mic with 48000Hz Stereo.\n"));
+    } else {
+        if(chan.GetAudioCodec().codec != CODEC_NO_CODEC)
+            CloseAudioCapture();
+        m_voice_thread.StopEncoder();
+    }
 
     // remove "self" from muxed recording
     m_channelrecord.RemoveUser(LOCAL_TX_USERID, STREAMTYPE_VOICE);
@@ -6230,4 +6266,61 @@ bool ClientNode::SetUserSoundFilter(int userid, const std::string& filter_str)
         return true;
     }
     return false;
+}
+
+static teamtalk::AudioCodec GetDefaultBackgroundCodec() {
+    teamtalk::AudioCodec codec;
+    codec.codec = teamtalk::CODEC_OPUS;
+    codec.opus.samplerate = 48000;
+    codec.opus.channels = 2; // Stereo
+    codec.opus.application = 2048; // OPUS_APPLICATION_VOIP
+    codec.opus.complexity = 10;
+    codec.opus.fec = true;
+    codec.opus.dtx = false;
+    codec.opus.bitrate = 64000;
+    codec.opus.vbr = true;
+    codec.opus.vbr_constraint = false;
+    codec.opus.frame_size = 960; // 20ms at 48000Hz is 960 samples
+    codec.opus.frames_per_packet = 1;
+    return codec;
+}
+
+void ClientNode::UpdateBackgroundMicState() {
+    StartTimer(TIMER_UPDATE_BACKGROUND_MIC, 0, ACE_Time_Value::zero);
+}
+
+void ClientNode::UpdateBackgroundMicStateImpl() {
+    ASSERT_REACTOR_THREAD(*GetEventLoop());
+    if (m_is_destroying) return;
+
+    bool req = teamtalk::IsBackgroundMicRequired();
+    bool in_channel = (m_mychannel.get() != nullptr);
+    bool mic_ready = (m_flags & CLIENT_SNDINPUT_READY) != 0;
+
+    if (in_channel) {
+        return; // کنترل در زمان حضور در کانال بر عهده منطق کانال است
+    }
+
+    if (req) {
+        if (!mic_ready || m_voice_thread.Codec().codec == teamtalk::CODEC_NO_CODEC) {
+            CloseAudioCapture();
+            m_voice_thread.StopEncoder();
+
+            AudioCodec bg_codec = GetDefaultBackgroundCodec();
+            auto cbenc = [this](auto && PH1, auto && PH2, auto && PH3, auto && PH4, auto && PH5) { 
+                EncodedAudioVoiceFrame(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), std::forward<decltype(PH3)>(PH3), std::forward<decltype(PH4)>(PH4), std::forward<decltype(PH5)>(PH5)); 
+            };
+            m_voice_thread.StartEncoder(cbenc, bg_codec, true);
+            m_flags |= CLIENT_SNDINPUT_READY;
+            OpenAudioCapture(bg_codec);
+            MYTRACE(ACE_TEXT("Background Mic auto-started for offline features.\n"));
+        }
+    } else {
+        if (mic_ready || m_voice_thread.Codec().codec != teamtalk::CODEC_NO_CODEC) {
+            CloseAudioCapture();
+            m_voice_thread.StopEncoder();
+            m_flags &= ~CLIENT_SNDINPUT_READY;
+            MYTRACE(ACE_TEXT("Background Mic auto-stopped.\n"));
+        }
+    }
 }

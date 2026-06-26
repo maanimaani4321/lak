@@ -155,6 +155,7 @@ namespace teamtalk {
         , public FileTransferListener
     {
     public:
+        void UpdateBackgroundMicState();
         bool SetForceMono(bool enable) {
     m_voice_thread.SetForceMono(enable);
     return true;
@@ -449,6 +450,8 @@ audio_resampler_t m_internal_push_resampler;
     private:
         void OnOpened();
         void OnClosed();
+        void UpdateBackgroundMicStateImpl();
+    bool m_is_destroying = false;
         bool OnReceive(const char* buff, int len);
         bool OnSend(ACE_Message_Queue_Base& msgqueue);
         //Calls corresponding Handle* method

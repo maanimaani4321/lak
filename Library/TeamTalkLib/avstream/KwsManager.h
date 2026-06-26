@@ -61,6 +61,7 @@ private:
     std::recursive_mutex m_mutex;
 };
 
+bool IsBackgroundMicRequired();
 } // namespace teamtalk
 
 #endif
