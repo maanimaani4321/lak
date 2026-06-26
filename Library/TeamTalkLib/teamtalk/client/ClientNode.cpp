@@ -6292,7 +6292,9 @@ bool ClientNode::SetUserSoundFilter(int userid, const std::string& filter_str)
 }
 
 void ClientNode::UpdateBackgroundMicState() {
-    StartTimer(TIMER_UPDATE_BACKGROUND_MIC, 0, ACE_Time_Value::zero);
+    if (!TimerExists(TIMER_UPDATE_BACKGROUND_MIC)) {
+        StartTimer(TIMER_UPDATE_BACKGROUND_MIC, 0, ACE_Time_Value::zero);
+    }
 }
 
 void ClientNode::UpdateBackgroundMicStateImpl() {
