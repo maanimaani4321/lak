@@ -4196,6 +4196,9 @@ void ClientNode::Disconnect()
 
     MYTRACE(ACE_TEXT("Disconnecting #%d.\n"), GetUserID());
 
+        CloseAudioCapture();
+    m_voice_thread.StopEncoder();
+    
     ResetTimers();
     
     ACE_HANDLE h = ACE_INVALID_HANDLE;
