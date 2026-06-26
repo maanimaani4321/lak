@@ -154,6 +154,7 @@ namespace teamtalk {
         , public soundsystem::StreamCapture
         , public FileTransferListener
     {
+        friend class BackgroundMicNotificationHandler;
     public:
         void UpdateBackgroundMicState();
         bool SetForceMono(bool enable) {
