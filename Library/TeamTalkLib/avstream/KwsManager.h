@@ -12,6 +12,14 @@ namespace media {
 
 namespace teamtalk {
 
+// اشتراک‌گذاری متغیرهای JNI بین واحدهای کامپایل به صورت سراسری
+extern JavaVM* g_jvm;
+extern jobject g_java_listener_ref;
+extern jmethodID g_callback_method_id;
+extern jmethodID g_enroll_callback_method_id;
+extern jmethodID g_recording_finished_method_id;
+extern jmethodID g_assistant_result_method_id;
+
 void KwsInit(JavaVM* vm);
 
 bool KwsStart(JNIEnv* env, jobject jlistener,

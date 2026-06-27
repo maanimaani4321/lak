@@ -41,12 +41,13 @@ enum KwsState {
 static std::atomic<int> g_state{STATE_INACTIVE};
 static std::vector<float> g_enrollment_speech_buffer; // بافر جمع‌آوری صدای انسان برای تولید امضای صوتی
 
-static JavaVM* g_jvm = nullptr;
-static jobject g_java_listener_ref = nullptr;
-static jmethodID g_callback_method_id = nullptr;
-static jmethodID g_enroll_callback_method_id = nullptr;
-static jmethodID g_recording_finished_method_id = nullptr;
-static jmethodID g_assistant_result_method_id = nullptr;
+// پیاده‌سازی متغیرهای سراسری اشتراک‌گذاری شده با JNI (بدون کلمه کلیدی static)
+JavaVM* g_jvm = nullptr;
+jobject g_java_listener_ref = nullptr;
+jmethodID g_callback_method_id = nullptr;
+jmethodID g_enroll_callback_method_id = nullptr;
+jmethodID g_recording_finished_method_id = nullptr;
+jmethodID g_assistant_result_method_id = nullptr;
 
 // تغییر متغیرها به ساختار اتمیک جهت جلوگیری از قفل‌های سنگین در زمان ارزیابی وضعیت میکروفون
 static std::atomic<bool> g_active{false};
@@ -86,7 +87,7 @@ static float CosineSimilarity(const float* a, const float* b, int dim) {
     return dot_product / (std::sqrt(norm_a) * std::sqrt(norm_b));
 }
 
-// ۳. تابع ارسال سیگنال دتکت کلمه کلیدی به جاوا
+// ۳. تابع ارسال سیگنال دتکت کلمه کلیدی به جاوا (بالای لوله پردازش صوتی قرار گرفت)
 static void NotifyJavaListener(const std::string& keyword) {
     if (!g_jvm || !g_java_listener_ref || !g_callback_method_id) return;
 
@@ -184,6 +185,42 @@ static void ExtractAndNotifyEnrollmentEmbedding(const std::vector<float>& audio_
     }
 }
 
+// تبدیل کاملاً ایمن و قابل حمل ACE_TString به std::string بدون در نظر گرفتن فلگ یونیکد
+static std::string GetUtf8String(const ACE_TString& str) {
+#if defined(UNICODE)
+    return UnicodeToUtf8(str).c_str();
+#else
+    return str.c_str();
+#endif
+}
+
+// متد فوق‌العاده امن و استاندارد جهت اسکیپ کردن کاراکترهای خاص در قالب JSON
+static std::string EscapeJsonString(const std::string& input) {
+    std::string escaped;
+    escaped.reserve(input.size() * 1.1);
+    for (char c : input) {
+        switch (c) {
+            case '\"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\b': escaped += "\\b"; break;
+            case '\f': escaped += "\\f"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default:
+                if (c >= 0 && c < 32) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    escaped += buf;
+                } else {
+                    escaped += c;
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
 void KwsInit(JavaVM* vm) {
     std::lock_guard<std::recursive_mutex> lock(g_mutex);
     g_jvm = vm;
@@ -232,7 +269,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
     {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
         try {
-            // ۱. مقداردهی اولیه VAD
             SherpaOnnxVadModelConfig vad_config;
             std::memset(&vad_config, 0, sizeof(vad_config));
             vad_config.silero_vad.model = vad_path.c_str();
@@ -250,7 +286,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 return false;
             }
 
-            // ۲. مقداردهی اولیه KeywordSpotter
             SherpaOnnxKeywordSpotterConfig config;
             std::memset(&config, 0, sizeof(config));
             config.feat_config.sample_rate = 16000;
@@ -284,7 +319,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 return false;
             }
 
-            // ۳. مقداردهی اولیه Speaker Embedding Extractor
             if (!wespeaker_path.empty()) {
                 SherpaOnnxSpeakerEmbeddingExtractorConfig extractor_config;
                 std::memset(&extractor_config, 0, sizeof(extractor_config));
@@ -320,8 +354,7 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 g_recording_finished_method_id = nullptr;
             }
 
-            // کالبک دو پارامتری حاوی پاسخ متنی و وضعیت موفقیت پردازش (String, boolean)
-            g_assistant_result_method_id = env->GetMethodID(clazz, "onAssistantResult", "(Ljava/lang/String;Z)V");
+            g_assistant_result_method_id = env->GetMethodID(clazz, "onVoiceAssistantResult", "(Ljava/lang/String;Z)V");
             if (env->ExceptionCheck()) {
                 env->ExceptionClear();
                 g_assistant_result_method_id = nullptr;
@@ -378,21 +411,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
     return success;
 }
 
-bool KwsStartSpeakerEnrollment(JNIEnv* env) {
-    bool success = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_mutex);
-        if (!g_active.load(std::memory_order_relaxed) || !g_speaker_extractor) return false;
-        g_state.store(STATE_ENROLLMENT_ACTIVE, std::memory_order_release);
-        g_enrollment_speech_buffer.clear();
-        success = true;
-    }
-    if (success) {
-        TT_UpdateBackgroundMicAll();
-    }
-    return true;
-}
-
 void KwsStop(JNIEnv* env) {
     bool was_active = false;
     {
@@ -436,6 +454,7 @@ void KwsStop(JNIEnv* env) {
         }
         g_callback_method_id = nullptr;
         g_enroll_callback_method_id = nullptr;
+        g_assistant_result_method_id = nullptr;
         was_active = true;
     }
 
@@ -622,12 +641,8 @@ static void CollectChannelsNative(const clientchannel_t& chan, std::ostringstrea
     
     std::string chan_name = "";
     if (chan->GetName().length() > 0) {
-        chan_name = UnicodeToUtf8(chan->GetName().c_str()).c_str();
-    }
-    
-    size_t pos;
-    while ((pos = chan_name.find("\"")) != std::string::npos) {
-        chan_name.replace(pos, 1, "\\\"");
+        // رفع خطای کامپایل اندروید با کمک متد ایمن GetUtf8String به جای کدهای قدیمی
+        chan_name = EscapeJsonString(GetUtf8String(chan->GetName()));
     }
     
     oss << "\"n\":\"" << chan_name << "\",";
@@ -649,19 +664,14 @@ static void CollectUsersNative(const clientchannel_t& root, std::ostringstream& 
         
         std::string nick = "";
         if (u->GetNickname().length() > 0) {
-            nick = UnicodeToUtf8(u->GetNickname().c_str()).c_str();
-        }
-        size_t pos;
-        while ((pos = nick.find("\"")) != std::string::npos) {
-            nick.replace(pos, 1, "\\\"");
+            // رفع خطای کامپایل اندروید با کمک متد ایمن GetUtf8String به جای کدهای قدیمی
+            nick = EscapeJsonString(GetUtf8String(u->GetNickname()));
         }
         
         std::string username = "";
         if (u->GetUsername().length() > 0) {
-            username = UnicodeToUtf8(u->GetUsername().c_str()).c_str();
-        }
-        while ((pos = username.find("\"")) != std::string::npos) {
-            username.replace(pos, 1, "\\\"");
+            // رفع خطای کامپایل اندروید با کمک متد ایمن GetUtf8String به جای کدهای قدیمی
+            username = EscapeJsonString(GetUtf8String(u->GetUsername()));
         }
 
         oss << "\"n\":\"" << nick << "\",";
@@ -825,7 +835,6 @@ static void StopAssistant() {
     }
 
     if (was_active) {
-        // ارسال رشته خالی به جاوا برای اطلاع از پایان فوری فرآیند ضبط محلی
         NotifyVoiceRecordingFinished("", 1);
         TT_UpdateBackgroundMicAll();
 
@@ -1091,7 +1100,6 @@ void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
     }
 
     if (assistant_finished) {
-        // ارسال رشته خالی به جاوا برای اطلاع از پایان فوری فرآیند ضبط محلی
         NotifyVoiceRecordingFinished("", 1);
         
         std::thread net_thread(
