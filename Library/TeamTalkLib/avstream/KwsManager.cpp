@@ -411,6 +411,19 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
     return success;
 }
 
+bool KwsStartSpeakerEnrollment(JNIEnv* env) {
+    std::lock_guard<std::recursive_mutex> lock(g_mutex);
+    
+    if (!g_active.load(std::memory_order_relaxed) || !g_enroll_callback_method_id) {
+        return false;
+    }
+
+    g_enrollment_speech_buffer.clear();
+    g_state.store(STATE_ENROLLMENT_ACTIVE, std::memory_order_release);
+    TT_UpdateBackgroundMicAll();
+    return true;
+}
+
 void KwsStop(JNIEnv* env) {
     bool was_active = false;
     {
