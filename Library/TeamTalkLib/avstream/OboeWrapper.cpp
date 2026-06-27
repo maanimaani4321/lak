@@ -332,7 +332,6 @@ void OboeWrapper::CloseStream(inputstreamer_t streamer) {
         if (streamer->stream) {
             streamer->stream->requestStop();
             streamer->stream->close();
-            streamer->stream.reset();
 
             std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
             g_garbage_input_streamers.push_back({streamer, GETTIMESTAMP()});
@@ -562,7 +561,6 @@ void OboeWrapper::CloseStream(outputstreamer_t streamer) {
         if (streamer->stream) {
             streamer->stream->requestStop();
             streamer->stream->close();
-            streamer->stream.reset();
 
             std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
             g_garbage_output_streamers.push_back({streamer, GETTIMESTAMP()});
