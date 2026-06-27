@@ -636,6 +636,7 @@ static void StopAssistant() {
             }
             g_assistantResampler.reset();
             g_assistantFifo.clear();
+            g_assistantSendToTT = true;
             was_active = true;
         }
     }
@@ -669,6 +670,7 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
             }
             g_assistantResampler.reset();
             g_assistantFifo.clear();
+            g_assistantSendToTT = true;
             NotifyVoiceRecordingFinished(g_assistantFile, 1);
         }
 
@@ -720,6 +722,7 @@ bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool
             }
             g_messageResampler.reset();
             g_messageFifo.clear();
+            g_messageSendToTT = true;
             NotifyVoiceRecordingFinished(g_messageFile, 2);
         }
 
@@ -770,6 +773,7 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
             }
             g_messageResampler.reset();
             g_messageFifo.clear();
+            g_messageSendToTT = true;
             success = true;
         }
     }
@@ -825,6 +829,7 @@ void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
                     }
                     g_assistantResampler.reset();
                     g_assistantFifo.clear();
+                    g_assistantSendToTT = true;
                     assistant_finished = true;
                     break;
                 }
