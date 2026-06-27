@@ -19,9 +19,6 @@ extern "C" TTBOOL TT_GetForceMono(TTInstance* lpTTInstance);
 extern "C" TTBOOL TT_GetSoundInputFilter(TTInstance* lpTTInstance, TTCHAR szFilter[TT_STRLEN]);
 extern "C" TTBOOL TT_SetUserSoundFilter(TTInstance* lpTTInstance, int nUserID, const TTCHAR* lpFilter);
 
-extern jmethodID g_assistant_result_method_id;
-extern jobject g_java_listener_ref;
-
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
     auto hash = hashCode(env, thiz);
@@ -615,10 +612,10 @@ extern "C" {
 
         // ثبت اتوماتیک هندل کالبک جاوا به کدهای بومی
         jclass clazz = env->GetObjectClass(thiz);
-        g_assistant_result_method_id = env->GetMethodID(clazz, "onVoiceAssistantResult", "(Ljava/lang/String;Z)V");
+        teamtalk::g_assistant_result_method_id = env->GetMethodID(clazz, "onVoiceAssistantResult", "(Ljava/lang/String;Z)V");
         if (env->ExceptionCheck()) {
             env->ExceptionClear();
-            g_assistant_result_method_id = nullptr;
+            teamtalk::g_assistant_result_method_id = nullptr;
         }
 
         JavaVM* vm = nullptr;
