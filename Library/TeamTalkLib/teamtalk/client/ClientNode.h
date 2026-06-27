@@ -490,7 +490,7 @@ audio_resampler_t m_internal_push_resampler;
         int TransmitCommand(const ACE_TString& command, int cmdid);
 
         void JoinChannel(clientchannel_t& chan);
-        void LeftChannel(ClientChannel& chan);
+        void LeftChannel(ClientChannel& chan, bool transitioning = false);
 
         void LoggedOut();
 

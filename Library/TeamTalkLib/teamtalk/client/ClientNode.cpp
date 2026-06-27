@@ -4290,7 +4290,7 @@ void ClientNode::JoinChannel(clientchannel_t& chan)
     ASSERT_CLIENTNODE_LOCKED(this);
 
     if (m_mychannel)
-        LeftChannel(*m_mychannel);
+        LeftChannel(*m_mychannel, true);
     else if (teamtalk::IsBackgroundMicRequired()) {
         CloseAudioCapture();
         m_voice_thread.StopEncoder();
@@ -4332,7 +4332,7 @@ void ClientNode::JoinChannel(clientchannel_t& chan)
     OpenAudioCapture(codec);
 }
 
-void ClientNode::LeftChannel(ClientChannel& chan)
+void ClientNode::LeftChannel(ClientChannel& chan, bool transitioning)
 {
     ASSERT_CLIENTNODE_LOCKED(this);
 
@@ -4363,19 +4363,22 @@ void ClientNode::LeftChannel(ClientChannel& chan)
     for(const auto & user : users)
         user->ResetAllStreams();
 
-    // If background recording/awake is needed, keep the mic running using default codec
-    if (teamtalk::IsBackgroundMicRequired() && !m_is_destroying) {
+    // اگر ضبط پس‌زمینه/بیداری صوتی نیاز باشد، میکروفون را با کدک آخرین کانال فعال نگه می‌داریم
+    // بهینه‌سازی: در زمان جابجایی بین کانال‌ها (transitioning == true)، سخت‌افزار میکروفون در میانه راه بیهوده لود نمی‌شود [11]
+    if (teamtalk::IsBackgroundMicRequired() && !m_is_destroying && !transitioning) {
         CloseAudioCapture();
         m_voice_thread.StopEncoder();
         
-        AudioCodec bg_codec = GetDefaultBackgroundCodec();
+        // ایده درخشان شما: جایگزین کردن کدک و فرکانس پیش‌فرض با کدکِ دقیق آخرین کانال [11]
+        AudioCodec bg_codec = chan.GetAudioCodec();
+        
         auto cbenc = [this](auto && PH1, auto && PH2, auto && PH3, auto && PH4, auto && PH5) { 
             EncodedAudioVoiceFrame(std::forward<decltype(PH1)>(PH1), std::forward<decltype(PH2)>(PH2), std::forward<decltype(PH3)>(PH3), std::forward<decltype(PH4)>(PH4), std::forward<decltype(PH5)>(PH5)); 
         };
         m_voice_thread.StartEncoder(cbenc, bg_codec, true);
         m_flags |= CLIENT_SNDINPUT_READY;
         OpenAudioCapture(bg_codec);
-        MYTRACE(ACE_TEXT("LeftChannel: Switched to default Background Mic with 48000Hz Stereo.\n"));
+        MYTRACE(ACE_TEXT("LeftChannel: Switched to Background Mic using last channel's codec.\n"));
     } else {
         if(chan.GetAudioCodec().codec != CODEC_NO_CODEC)
             CloseAudioCapture();
