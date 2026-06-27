@@ -199,7 +199,10 @@ oboe::DataCallbackResult OboeInputStreamer::onAudioReady(oboe::AudioStream *oboe
     }
 
     while (fifo_size >= requiredSamples) {
-        recorder->StreamCaptureCb(*this, fifo_buffer.data(), framesize);
+        // گارد محافظ: اگر شیء رکوردر صوتی حذف شده است، عملیات کالبک سخت‌افزاری را نادیده بگیر
+        if (recorder) { 
+            recorder->StreamCaptureCb(*this, fifo_buffer.data(), framesize);
+        }
         
         fifo_size -= requiredSamples;
         if (fifo_size > 0) {
@@ -323,14 +326,17 @@ bool OboeWrapper::StartStream(inputstreamer_t streamer) {
 
 void OboeWrapper::CloseStream(inputstreamer_t streamer) {
     CleanGarbageStreamers();
-    if (streamer && streamer->stream) {
-        streamer->stream->requestStop();
-        streamer->stream->close();
-        streamer->stream.reset();
+    if (streamer) {
+        streamer->recorder = nullptr; 
+        
+        if (streamer->stream) {
+            streamer->stream->requestStop();
+            streamer->stream->close();
+            streamer->stream.reset();
 
-        // شیء کالبک صوتی را به صف زباله‌روب می‌فرستیم تا ۳ ثانیه زنده بماند و از کرش جلوگیری شود
-        std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
-        g_garbage_input_streamers.push_back({streamer, GETTIMESTAMP()});
+            std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
+            g_garbage_input_streamers.push_back({streamer, GETTIMESTAMP()});
+        }
     }
 }
 
@@ -407,7 +413,12 @@ oboe::DataCallbackResult OboeOutputStreamer::onAudioReady(oboe::AudioStream *obo
     bool more = true;
 
     while (fifo_size < totalOutgoingSamples && more) {
-        more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
+        // گارد محافظ: اگر پلیر صوتی حذف شده است، پخش کالبک را متوقف کن
+        if (player) {
+            more = player->StreamPlayerCb(*this, cb_buffer.data(), framesize);
+        } else {
+            more = false;
+        }
         
         OboeWrapper* sndSys = OboeWrapper::getInstance().get();
         if (sndSys) {
@@ -545,13 +556,17 @@ outputstreamer_t OboeWrapper::NewStream(soundsystem::StreamPlayer* player, int o
 
 void OboeWrapper::CloseStream(outputstreamer_t streamer) {
     CleanGarbageStreamers();
-    if (streamer && streamer->stream) {
-        streamer->stream->requestStop();
-        streamer->stream->close();
-        streamer->stream.reset();
+    if (streamer) {
+        streamer->player = nullptr; 
+        
+        if (streamer->stream) {
+            streamer->stream->requestStop();
+            streamer->stream->close();
+            streamer->stream.reset();
 
-        std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
-        g_garbage_output_streamers.push_back({streamer, GETTIMESTAMP()});
+            std::lock_guard<std::recursive_mutex> lock(g_garbage_mutex);
+            g_garbage_output_streamers.push_back({streamer, GETTIMESTAMP()});
+        }
     }
 }
 
