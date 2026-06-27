@@ -19,6 +19,9 @@ extern "C" TTBOOL TT_GetForceMono(TTInstance* lpTTInstance);
 extern "C" TTBOOL TT_GetSoundInputFilter(TTInstance* lpTTInstance, TTCHAR szFilter[TT_STRLEN]);
 extern "C" TTBOOL TT_SetUserSoundFilter(TTInstance* lpTTInstance, int nUserID, const TTCHAR* lpFilter);
 
+extern jmethodID g_assistant_result_method_id;
+extern jobject g_java_listener_ref;
+
 static void AddTTInstance(JNIEnv* env, jobject thiz, TTInstance* ttinst)
 {
     auto hash = hashCode(env, thiz);
