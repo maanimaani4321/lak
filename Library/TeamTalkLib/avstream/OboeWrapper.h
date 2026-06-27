@@ -42,6 +42,13 @@ namespace soundsystem {
         OboeInputStreamer(StreamCapture* r, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
 
+        virtual ~OboeInputStreamer() {
+            if (stream) {
+                stream->requestStop();
+                stream->close();
+            }
+        }
+
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
         void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
     };
@@ -56,6 +63,13 @@ namespace soundsystem {
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
+
+        virtual ~OboeOutputStreamer() {
+            if (stream) {
+                stream->requestStop();
+                stream->close();
+            }
+        }
 
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
         void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
