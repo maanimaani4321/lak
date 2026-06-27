@@ -907,7 +907,7 @@ bool VoiceFeaturesManager::StartVoiceAssistant(
             }
         }
 
-        std::string temp_file = "/sdcard/Android/data/dk.bearware/cache/assistant_temp.ogg";
+        std::string temp_file = "/sdcard/Android/data/dk.bearware.gui/cache/assistant_temp.ogg";
         g_assistantEncoder = std::make_unique<OpusEncFile>();
         
         #if defined(UNICODE)
