@@ -4330,6 +4330,7 @@ void ClientNode::JoinChannel(clientchannel_t& chan)
 
     //start recorder for voice stream
     OpenAudioCapture(codec);
+    m_flags |= CLIENT_SNDINPUT_READY;
 }
 
 void ClientNode::LeftChannel(ClientChannel& chan, bool transitioning)
