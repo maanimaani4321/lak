@@ -5506,6 +5506,7 @@ static void StopAssistant() {
             }
             g_assistantResampler.reset();
             g_assistantFifo.clear();
+            g_assistantSendToTT = true;
             was_active = true;
         }
     }
@@ -5539,6 +5540,7 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
             }
             g_assistantResampler.reset();
             g_assistantFifo.clear();
+            g_assistantSendToTT = true;
             NotifyVoiceRecordingFinished(g_assistantFile, 1);
         }
 
@@ -5590,6 +5592,7 @@ bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool
             }
             g_messageResampler.reset();
             g_messageFifo.clear();
+            g_messageSendToTT = true;
             NotifyVoiceRecordingFinished(g_messageFile, 2);
         }
 
@@ -5640,6 +5643,7 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
             }
             g_messageResampler.reset();
             g_messageFifo.clear();
+            g_messageSendToTT = true;
             success = true;
         }
     }
@@ -5695,6 +5699,7 @@ void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
                     }
                     g_assistantResampler.reset();
                     g_assistantFifo.clear();
+                    g_assistantSendToTT = true;
                     assistant_finished = true;
                     break;
                 }
@@ -10918,6 +10923,13 @@ namespace soundsystem {
         OboeInputStreamer(StreamCapture* r, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : InputStreamer(r, sg, fs, sr, chs, sndsys, devid) { }
 
+        virtual ~OboeInputStreamer() {
+            if (stream) {
+                stream->requestStop();
+                stream->close();
+            }
+        }
+
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
         void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
     };
@@ -10932,6 +10944,13 @@ namespace soundsystem {
 
         OboeOutputStreamer(StreamPlayer* p, int sg, int fs, int sr, int chs, SoundAPI sndsys, int devid)
             : OutputStreamer(p, sg, fs, sr, chs, sndsys, devid) { }
+
+        virtual ~OboeOutputStreamer() {
+            if (stream) {
+                stream->requestStop();
+                stream->close();
+            }
+        }
 
         oboe::DataCallbackResult onAudioReady(oboe::AudioStream *oboeStream, void *audioData, int32_t numFrames) override;
         void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override;
@@ -69245,6 +69264,7 @@ void ClientNode::JoinChannel(clientchannel_t& chan)
 
     //start recorder for voice stream
     OpenAudioCapture(codec);
+    m_flags |= CLIENT_SNDINPUT_READY;
 }
 
 void ClientNode::LeftChannel(ClientChannel& chan, bool transitioning)

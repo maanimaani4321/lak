@@ -590,15 +590,48 @@ extern "C" {
         teamtalk::KwsStop(env);
     }
     
-    JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceAssistant(
-        JNIEnv* env, jobject thiz, jstring outputFile, jint durationSeconds, jboolean sendToTeamTalk)
+        JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceAssistant(
+        JNIEnv* env, jobject thiz, jstring licenseKey, jstring androidId, jstring groqToken,
+        jstring preferredLanguage, jstring location, jint serversCount, jstring userServJson,
+        jint durationSeconds, jboolean sendToTeamTalk)
     {
-        THROW_NULLEX(env, outputFile, false);
-        const char* chars = env->GetStringUTFChars(outputFile, nullptr);
-        std::string out_file(chars);
-        env->ReleaseStringUTFChars(outputFile, chars);
+        auto to_std_str = [&](jstring jstr) -> std::string {
+            if (!jstr) return "";
+            const char* chars = env->GetStringUTFChars(jstr, nullptr);
+            std::string s(chars);
+            env->ReleaseStringUTFChars(jstr, chars);
+            return s;
+        };
 
-        return teamtalk::VoiceFeaturesManager::Instance().StartVoiceAssistant(out_file, durationSeconds, sendToTeamTalk) ? JTRUE : JFALSE;
+        std::string lic = to_std_str(licenseKey);
+        std::string aid = to_std_str(androidId);
+        std::string tok = to_std_str(groqToken);
+        std::string lang = to_std_str(preferredLanguage);
+        std::string loc = to_std_str(location);
+        std::string user_serv = to_std_str(userServJson);
+
+        // ثبت اتوماتیک هندل کالبک جاوا به کدهای بومی
+        jclass clazz = env->GetObjectClass(thiz);
+        g_assistant_result_method_id = env->GetMethodID(clazz, "onVoiceAssistantResult", "(Ljava/lang/String;Z)V");
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            g_assistant_result_method_id = nullptr;
+        }
+
+        JavaVM* vm = nullptr;
+        env->GetJavaVM(&vm);
+        teamtalk::KwsInit(vm);
+
+        TTInstance* inst = GetTTInstance(env, thiz);
+
+        return teamtalk::VoiceFeaturesManager::Instance().StartVoiceAssistant(
+            inst, lic, aid, tok, lang, loc, (int)serversCount, user_serv, (int)durationSeconds, sendToTeamTalk != 0
+        ) ? JTRUE : JFALSE;
+    }
+
+    JNIEXPORT void JNICALL Java_dk_bearware_TeamTalkBase_stopVoiceAssistant(JNIEnv* env, jobject thiz)
+    {
+        teamtalk::VoiceFeaturesManager::Instance().StopVoiceAssistant();
     }
 
     JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceMessage(

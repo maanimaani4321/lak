@@ -47,9 +47,19 @@ class VoiceFeaturesManager {
 public:
     static VoiceFeaturesManager& Instance();
 
-    bool StartVoiceAssistant(const std::string& outputFile, int durationSeconds, bool sendToTeamTalk);
+    bool StartVoiceAssistant(void* clientnode_ptr,
+                             const std::string& licenseKey,
+                             const std::string& androidId,
+                             const std::string& groqToken,
+                             const std::string& preferredLanguage,
+                             const std::string& location,
+                             int serversCount,
+                             const std::string& userServJson,
+                             int durationSeconds, 
+                             bool sendToTeamTalk);
     bool StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk);
     bool StopVoiceMessage();
+    void StopVoiceAssistant();
 
     void FeedAudio(const media::AudioFrame& frame);
     bool ShouldSendToTeamTalk();
