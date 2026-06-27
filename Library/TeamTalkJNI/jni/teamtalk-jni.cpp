@@ -591,7 +591,7 @@ extern "C" {
     }
     
         JNIEXPORT jboolean JNICALL Java_dk_bearware_TeamTalkBase_startVoiceAssistant(
-        JNIEnv* env, jobject thiz, jstring licenseKey, jstring androidId, jstring groqToken,
+        JNIEnv* env, jobject thiz, jstring tempFilePath, jstring licenseKey, jstring androidId, jstring groqToken,
         jstring preferredLanguage, jstring location, jint serversCount, jstring userServJson,
         jint durationSeconds, jboolean sendToTeamTalk)
     {
@@ -603,6 +603,7 @@ extern "C" {
             return s;
         };
 
+        std::string temp_file = to_std_str(tempFilePath);
         std::string lic = to_std_str(licenseKey);
         std::string aid = to_std_str(androidId);
         std::string tok = to_std_str(groqToken);
@@ -625,7 +626,7 @@ extern "C" {
         TTInstance* inst = GetTTInstance(env, thiz);
 
         return teamtalk::VoiceFeaturesManager::Instance().StartVoiceAssistant(
-            inst, lic, aid, tok, lang, loc, (int)serversCount, user_serv, (int)durationSeconds, sendToTeamTalk != 0
+            inst, temp_file, lic, aid, tok, lang, loc, (int)serversCount, user_serv, (int)durationSeconds, sendToTeamTalk != 0
         ) ? JTRUE : JFALSE;
     }
 

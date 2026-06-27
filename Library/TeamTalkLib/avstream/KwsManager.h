@@ -56,6 +56,7 @@ public:
     static VoiceFeaturesManager& Instance();
 
     bool StartVoiceAssistant(void* clientnode_ptr,
+                             const std::string& temp_file,
                              const std::string& licenseKey,
                              const std::string& androidId,
                              const std::string& groqToken,

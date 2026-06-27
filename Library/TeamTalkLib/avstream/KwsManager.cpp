@@ -876,6 +876,7 @@ VoiceFeaturesManager::VoiceFeaturesManager() {}
 
 bool VoiceFeaturesManager::StartVoiceAssistant(
     void* clientnode_ptr,
+    const std::string& temp_file,
     const std::string& licenseKey,
     const std::string& androidId,
     const std::string& groqToken,
@@ -907,7 +908,6 @@ bool VoiceFeaturesManager::StartVoiceAssistant(
             }
         }
 
-        std::string temp_file = "/sdcard/Android/data/dk.bearware.gui/cache/assistant_temp.ogg";
         g_assistantEncoder = std::make_unique<OpusEncFile>();
         
         #if defined(UNICODE)
