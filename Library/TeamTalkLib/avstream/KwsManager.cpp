@@ -3,12 +3,17 @@
 #include "codec/MediaUtil.h"
 #include "avstream/AudioResampler.h"
 #include "sherpa-onnx/c-api/c-api.h"
+#include "myace/MyINet.h"
+#include "teamtalk/client/ClientNode.h"
 #include <mutex>
 #include <vector>
 #include <algorithm>
 #include <cstring>
 #include <cmath>
-#include <atomic> // هدر اتمیک برای متغیرهای سبک و سریع
+#include <atomic>
+#include <sstream>
+#include <fstream>
+#include <thread>
 
 extern "C" void TT_UpdateBackgroundMicAll();
 
@@ -41,6 +46,7 @@ static jobject g_java_listener_ref = nullptr;
 static jmethodID g_callback_method_id = nullptr;
 static jmethodID g_enroll_callback_method_id = nullptr;
 static jmethodID g_recording_finished_method_id = nullptr;
+static jmethodID g_assistant_result_method_id = nullptr;
 
 // تغییر متغیرها به ساختار اتمیک جهت جلوگیری از قفل‌های سنگین در زمان ارزیابی وضعیت میکروفون
 static std::atomic<bool> g_active{false};
@@ -80,7 +86,7 @@ static float CosineSimilarity(const float* a, const float* b, int dim) {
     return dot_product / (std::sqrt(norm_a) * std::sqrt(norm_b));
 }
 
-// ۳. تابع ارسال سیگنال دتکت کلمه کلیدی به جاوا (بالای لوله پردازش صوتی قرار گرفت)
+// ۳. تابع ارسال سیگنال دتکت کلمه کلیدی به جاوا
 static void NotifyJavaListener(const std::string& keyword) {
     if (!g_jvm || !g_java_listener_ref || !g_callback_method_id) return;
 
@@ -211,7 +217,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 float speaker_verify_threshold,
                 const std::vector<float>& target_speaker_embedding)
 {
-    // بررسی سریع وضعیت بدون نیاز به قفل کردن ملوتکس به جهت کاهش سربار مصرف پردازنده
     if (g_active.load(std::memory_order_relaxed)) return true;
 
     if (!FileExists(encoder_path) || !FileExists(decoder_path) || !FileExists(joiner_path) ||
@@ -315,6 +320,13 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
                 g_recording_finished_method_id = nullptr;
             }
 
+            // کالبک دو پارامتری حاوی پاسخ متنی و وضعیت موفقیت پردازش (String, boolean)
+            g_assistant_result_method_id = env->GetMethodID(clazz, "onAssistantResult", "(Ljava/lang/String;Z)V");
+            if (env->ExceptionCheck()) {
+                env->ExceptionClear();
+                g_assistant_result_method_id = nullptr;
+            }
+
             if (!g_callback_method_id) {
                 if (g_speaker_extractor) {
                     SherpaOnnxDestroySpeakerEmbeddingExtractor(g_speaker_extractor);
@@ -342,7 +354,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
             g_speaker_audio_buffer.clear();
             g_enrollment_speech_buffer.clear();
 
-            // تنظیم مقادیر اتمیک در انتهای فرآیند بالا آمدن منابع صوتی موتور ONNX
             g_active.store(true, std::memory_order_release);
             g_state.store(STATE_KWS_ACTIVE, std::memory_order_release);
             success = true;
@@ -361,7 +372,6 @@ bool KwsStartEx(JNIEnv* env, jobject jlistener,
         }
     }
 
-    // خروج از محدوده قفل بالا قبل از اطلاع‌رسانی به هسته جهت ممانعت قاطع از Deadlock
     if (success) {
         TT_UpdateBackgroundMicAll();
     }
@@ -435,14 +445,12 @@ void KwsStop(JNIEnv* env) {
 }
 
 void KwsProcessAudio(const short* buffer, int samples, int channels, int samplerate) {
-    // بهینه‌سازی بسیار سبک: اگر کلید استارت کلاینت زده نشده، فورا خارج شو بدون اینکه قفل گارد سنگین بگیری
     if (!g_active.load(std::memory_order_relaxed)) return;
 
     try {
         std::lock_guard<std::recursive_mutex> lock(g_mutex);
         if (!g_active.load() || !g_stream || !g_spotter || !g_vad) return;
 
-        // تبدیل کانال‌ها و نرمال‌سازی سیگنال صدا
         g_mono_buffer.resize(samples);
         for (int i = 0; i < samples; ++i) {
             float sum = 0.0f;
@@ -452,7 +460,6 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
             g_mono_buffer[i] = sum / (channels * 32768.0f);
         }
 
-        // همسان‌سازی فرکانس نمونه‌برداری به ۱۶۰۰۰ هرتز
         if (!g_resampler || g_current_samplerate != samplerate) {
             if (g_resampler) {
                 SherpaOnnxDestroyLinearResampler(g_resampler);
@@ -469,63 +476,47 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
         );
 
         if (resampled_output && resampled_output->samples && resampled_output->n > 0) {
-            
-            // الف) تجمیع نمونه‌های جدید صوتی در بافر VAD جهت فیلتر نویز ابعاد ONNX
             g_vad_buffer.insert(g_vad_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
 
-            // ب) فید دادن صوتی به VAD *فقط و فقط* در قالب بلوک‌های دقیق ۵۱۲ نمونه‌ای
             while (g_vad_buffer.size() >= 512) {
                 SherpaOnnxVoiceActivityDetectorAcceptWaveform(g_vad, g_vad_buffer.data(), 512);
                 g_vad_buffer.erase(g_vad_buffer.begin(), g_vad_buffer.begin() + 512);
             }
 
-            // ۲. تخلیه آنی صف سگمنت‌های بومی VAD
             SherpaOnnxVoiceActivityDetectorClear(g_vad);
 
-            // ۳. دریافت وضعیت آنی تشخیص صدای انسان
             bool speech_detected_now = (SherpaOnnxVoiceActivityDetectorDetected(g_vad) == 1);
 
-            // حالت اول: دتکشن کلمات فعال است (KWS MODE)
             int current_state = g_state.load(std::memory_order_relaxed);
             if (current_state == STATE_KWS_ACTIVE) {
-                
-                // مدیریت بافرینگ مداوم ۳ ثانیه آخر صدا جهت تایید هویت در صورت دتکشن کلمه کلیدی
                 g_speaker_audio_buffer.insert(g_speaker_audio_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
                 if (g_speaker_audio_buffer.size() > 48000) {
                     g_speaker_audio_buffer.erase(g_speaker_audio_buffer.begin(), g_speaker_audio_buffer.end() - 48000);
                 }
 
-                // زمان بیداری صوتی (۳.۵ ثانیه در فرکانس ۱۶ کیلوهرتز)
                 const int max_silence_samples = 3.5 * 16000; 
 
                 if (speech_detected_now) {
-                    // اگر فعالیت انسان تازه تشخیص داده شد، بافر سکوت قبل از کلمه را تزریق کن
                     if (g_silence_samples_counter >= max_silence_samples && !g_pre_roll_buffer.empty()) {
                         SherpaOnnxOnlineStreamAcceptWaveform(g_stream, 16000, g_pre_roll_buffer.data(), g_pre_roll_buffer.size());
                         g_pre_roll_buffer.clear();
                     }
-                    g_silence_samples_counter = 0; // ریست شمارنده سکوت
+                    g_silence_samples_counter = 0; 
                     g_kws_pipe_reset_done = false;
                 } else {
                     g_silence_samples_counter += resampled_output->n;
                 }
 
-                // ۴. لوله دکود مداوم کلمات
                 if (g_silence_samples_counter < max_silence_samples) {
-                    // تزریق جریان پیوسته صدا به مدل دکودر
                     SherpaOnnxOnlineStreamAcceptWaveform(g_stream, 16000, resampled_output->samples, resampled_output->n);
 
-                    // عملیات رمزگشایی فریم‌های صوتی
                     while (SherpaOnnxIsKeywordStreamReady(g_spotter, g_stream) == 1) {
                         SherpaOnnxDecodeKeywordStream(g_spotter, g_stream);
                     }
 
-                    // بررسی نتیجه استخراج کلمه
                     const SherpaOnnxKeywordResult* result = SherpaOnnxGetKeywordResult(g_spotter, g_stream);
                     if (result) {
                         if (result->keyword && std::strlen(result->keyword) > 0) {
-                            
-                            // ارزیابی تطبیق امضای صوتی گوینده در صورت فعال بودن
                             bool is_speaker_verified = true;
                             if (g_speaker_verify_enabled && g_speaker_extractor && !g_target_speaker_embedding.empty()) {
                                 is_speaker_verified = VerifySpeaker(g_speaker_audio_buffer);
@@ -534,37 +525,30 @@ void KwsProcessAudio(const short* buffer, int samples, int channels, int sampler
                             if (is_speaker_verified) {
                                 NotifyJavaListener(result->keyword);
                             }
-                            
                             SherpaOnnxResetKeywordStream(g_spotter, g_stream);
                         }
                         SherpaOnnxDestroyKeywordResult(result);
                     }
                 } else {
-                    // ۵. صرفه‌جویی شدید در مصرف باتری در صورت سکوت طولانی‌مدت (بیش از ۳.۵ ثانیه):
                     if (!g_kws_pipe_reset_done) {
                         SherpaOnnxResetKeywordStream(g_spotter, g_stream); 
                         g_kws_pipe_reset_done = true;
                         g_pre_roll_buffer.clear();
                     }
 
-                    // ذخیره ثانیه‌های آخر سکوت محیط جهت چسبندگی صوتی در بیداری بعدی
                     g_pre_roll_buffer.insert(g_pre_roll_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
                     if (g_pre_roll_buffer.size() > 16000) {
                         g_pre_roll_buffer.erase(g_pre_roll_buffer.begin(), g_pre_roll_buffer.end() - 16000);
                     }
                 }
             }
-            // حالت دوم: استخراج نمونه امضای صوتی گوینده فعال است (ENROLLMENT MODE)
             else if (current_state == STATE_ENROLLMENT_ACTIVE) {
-                // اگر صدای انسان توسط VAD تشخیص داده شد، نمونه‌ها را در بافر ثبت امضای صوتی ذخیره کن
                 if (speech_detected_now) {
                     g_enrollment_speech_buffer.insert(g_enrollment_speech_buffer.end(), resampled_output->samples, resampled_output->samples + resampled_output->n);
-                    
-                    // به محض اتمام دریافت ۳ ثانیه مداوم از صدای گوینده (۴۸۰۰۰ سمپل):
                     if (g_enrollment_speech_buffer.size() >= 48000) {
                         ExtractAndNotifyEnrollmentEmbedding(g_enrollment_speech_buffer);
                         g_enrollment_speech_buffer.clear();
-                        g_state.store(STATE_KWS_ACTIVE, std::memory_order_release); // بازگشت اتوماتیک به لوله دتکتور کلمه کلیدی
+                        g_state.store(STATE_KWS_ACTIVE, std::memory_order_release);
                         TT_UpdateBackgroundMicAll();
                     }
                 }
@@ -620,6 +604,205 @@ static void NotifyVoiceRecordingFinished(const std::string& filepath, int type) 
     }
 }
 
+// متغیرها و متدهای اختصاصی سیستم ارسال بومی دستیار صوتی کلاینت
+static std::string g_licenseKey;
+static std::string g_androidId;
+static std::string g_groqToken;
+static std::string g_preferredLanguage;
+static std::string g_location;
+static int g_serversCount = 0;
+static std::string g_userServJson;
+static void* g_clientnode = nullptr;
+
+static void CollectChannelsNative(const clientchannel_t& chan, std::ostringstream& oss, bool& first) {
+    if (!chan) return;
+    if (!first) oss << ",";
+    first = false;
+    oss << "\"" << chan->GetChannelID() << "\":{";
+    
+    std::string chan_name = "";
+    if (chan->GetName().length() > 0) {
+        chan_name = UnicodeToUtf8(chan->GetName().c_str()).c_str();
+    }
+    
+    size_t pos;
+    while ((pos = chan_name.find("\"")) != std::string::npos) {
+        chan_name.replace(pos, 1, "\\\"");
+    }
+    
+    oss << "\"n\":\"" << chan_name << "\",";
+    oss << "\"p\":" << (chan->GetParentChannel() ? chan->GetParentChannel()->GetChannelID() : 0);
+    oss << "}";
+    for (const auto& sub : chan->GetSubChannels()) {
+        CollectChannelsNative(sub, oss, first);
+    }
+}
+
+static void CollectUsersNative(const clientchannel_t& root, std::ostringstream& oss, bool& first) {
+    if (!root) return;
+    ClientChannel::users_t users;
+    root->GetUsers(users, true);
+    for (const auto& u : users) {
+        if (!first) oss << ",";
+        first = false;
+        oss << "\"" << u->GetUserID() << "\":{";
+        
+        std::string nick = "";
+        if (u->GetNickname().length() > 0) {
+            nick = UnicodeToUtf8(u->GetNickname().c_str()).c_str();
+        }
+        size_t pos;
+        while ((pos = nick.find("\"")) != std::string::npos) {
+            nick.replace(pos, 1, "\\\"");
+        }
+        
+        std::string username = "";
+        if (u->GetUsername().length() > 0) {
+            username = UnicodeToUtf8(u->GetUsername().c_str()).c_str();
+        }
+        while ((pos = username.find("\"")) != std::string::npos) {
+            username.replace(pos, 1, "\\\"");
+        }
+
+        oss << "\"n\":\"" << nick << "\",";
+        oss << "\"u\":\"" << username << "\",";
+        oss << "\"chan\":" << (u->GetChannel() ? u->GetChannel()->GetChannelID() : 0);
+        oss << "}";
+    }
+}
+
+static std::string BuildAssistantContextNative(void* clientnode_ptr, int serversCount, const std::string& userServJson) {
+    if (clientnode_ptr == nullptr) return "{}";
+    auto* clientnode = static_cast<ClientNode*>(clientnode_ptr);
+    
+    std::ostringstream oss;
+    oss << "{";
+    oss << "\"servers\":" << serversCount << ",";
+    oss << "\"myid\":" << clientnode->GetUserID() << ",";
+    
+    if (userServJson.empty()) {
+        oss << "\"userserv\":{},";
+    } else {
+        oss << "\"userserv\":" << userServJson << ",";
+    }
+    
+    oss << "\"chans\":{";
+    bool first_chan = true;
+    CollectChannelsNative(clientnode->GetRootChannel(), oss, first_chan);
+    oss << "},";
+    
+    oss << "\"users\":{";
+    bool first_user = true;
+    CollectUsersNative(clientnode->GetRootChannel(), oss, first_user);
+    oss << "}";
+    
+    oss << "}";
+    return oss.str();
+}
+
+static void NotifyVoiceAssistantResult(const std::string& resultJson, bool success) {
+    if (!g_jvm || !g_java_listener_ref || !g_assistant_result_method_id) return;
+
+    JNIEnv* env = nullptr;
+    bool is_attached = false;
+    jint res = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
+    if (res == JNI_EDETACHED) {
+        res = g_jvm->AttachCurrentThread(&env, nullptr);
+        if (res == JNI_OK) {
+            is_attached = true;
+        }
+    }
+
+    if (env) {
+        jstring j_res = env->NewStringUTF(resultJson.c_str());
+        env->CallVoidMethod(g_java_listener_ref, g_assistant_result_method_id, j_res, success ? JNI_TRUE : JNI_FALSE);
+        env->DeleteLocalRef(j_res);
+    }
+
+    if (is_attached) {
+        g_jvm->DetachCurrentThread();
+    }
+}
+
+static void AsyncSendVoiceAssistantRequest(
+    void* clientnode_ptr,
+    const std::string& licenseKey,
+    const std::string& androidId,
+    const std::string& groqToken,
+    const std::string& preferredLanguage,
+    const std::string& location,
+    int serversCount,
+    const std::string& userServJson,
+    const std::string& audioFilePath
+) {
+    std::string url = (location == "IR") ? "https://api.djfa.ir/voice/index.php" : "https://api.rnvda.ir/voice/index.php";
+    
+    std::string contextJson = BuildAssistantContextNative(clientnode_ptr, serversCount, userServJson);
+    
+    std::string boundary = "===Boundary" + std::to_string(GETTIMESTAMP()) + "====";
+    std::ostringstream body;
+    
+    auto write_form_field = [&](const std::string& name, const std::string& value) {
+        body << "--" << boundary << "\r\n";
+        body << "Content-Disposition: form-data; name=\"" << name << "\"\r\n";
+        body << "Content-Type: text/plain; charset=UTF-8\r\n\r\n";
+        body << value << "\r\n";
+    };
+
+    write_form_field("license_key", licenseKey);
+    write_form_field("android_id", androidId);
+    write_form_field("language", preferredLanguage);
+    write_form_field("groq_token", groqToken);
+    write_form_field("context", contextJson);
+
+    std::ifstream file(audioFilePath, std::ios::binary);
+    if (file.is_open()) {
+        std::vector<char> file_data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        file.close();
+
+        body << "--" << boundary << "\r\n";
+        body << "Content-Disposition: form-data; name=\"audio\"; filename=\"audio.ogg\"\r\n";
+        body << "Content-Type: audio/ogg\r\n\r\n";
+        body.write(file_data.data(), file_data.size());
+        body << "\r\n";
+    }
+    body << "--" << boundary << "--\r\n";
+
+    std::string post_data = body.str();
+    std::map<std::string, std::string> headers;
+    headers["Content-Type"] = "multipart/form-data; boundary=" + boundary;
+
+    std::string response;
+    ACE::HTTP::Status::Code statusCode = ACE::HTTP::Status::INVALID;
+
+    int ret = HttpPostRequest(url.c_str(), post_data.data(), post_data.size(), headers, response, &statusCode);
+    
+    bool request_success = (ret == 1 && statusCode == ACE::HTTP::Status::HTTP_OK);
+    
+    if (request_success) {
+        if (response.find("\"status\":\"error\"") != std::string::npos) {
+            if (response.find("LICENSE") != std::string::npos || 
+                response.find("DEVICE_BANNED") != std::string::npos ||
+                response.find("DEVICE_REMOVED") != std::string::npos ||
+                response.find("NOT_FOUND") != std::string::npos) {
+                
+                if (clientnode_ptr != nullptr) {
+                    auto* clientnode = static_cast<ClientNode*>(clientnode_ptr);
+                    clientnode->Disconnect();
+                    MYTRACE(ACE_TEXT("Voice Assistant: Native auto-disconnect triggered due to License Error.\n"));
+                }
+            }
+        }
+        NotifyVoiceAssistantResult(response, true);
+    } else {
+        NotifyVoiceAssistantResult("{\"status\":\"error\",\"message\":\"Network connection failed.\"}", false);
+    }
+
+    if (FileExists(audioFilePath)) {
+        std::remove(audioFilePath.c_str());
+    }
+}
+
 static void StopAssistant() {
     bool was_active = false;
     {
@@ -642,8 +825,23 @@ static void StopAssistant() {
     }
 
     if (was_active) {
-        NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        // ارسال رشته خالی به جاوا برای اطلاع از پایان فوری فرآیند ضبط محلی
+        NotifyVoiceRecordingFinished("", 1);
         TT_UpdateBackgroundMicAll();
+
+        std::thread net_thread(
+            AsyncSendVoiceAssistantRequest,
+            g_clientnode,
+            g_licenseKey,
+            g_androidId,
+            g_groqToken,
+            g_preferredLanguage,
+            g_location,
+            g_serversCount,
+            g_userServJson,
+            g_assistantFile
+        );
+        net_thread.detach();
     }
 }
 
@@ -654,7 +852,18 @@ VoiceFeaturesManager& VoiceFeaturesManager::Instance() {
 
 VoiceFeaturesManager::VoiceFeaturesManager() {}
 
-bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, int durationSeconds, bool sendToTeamTalk) {
+bool VoiceFeaturesManager::StartVoiceAssistant(
+    void* clientnode_ptr,
+    const std::string& licenseKey,
+    const std::string& androidId,
+    const std::string& groqToken,
+    const std::string& preferredLanguage,
+    const std::string& location,
+    int serversCount,
+    const std::string& userServJson,
+    int durationSeconds, 
+    bool sendToTeamTalk) 
+{
     bool success = false;
     {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
@@ -671,15 +880,18 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
             g_assistantResampler.reset();
             g_assistantFifo.clear();
             g_assistantSendToTT = true;
-            NotifyVoiceRecordingFinished(g_assistantFile, 1);
+            if (FileExists(g_assistantFile)) {
+                std::remove(g_assistantFile.c_str());
+            }
         }
 
+        std::string temp_file = "/sdcard/Android/data/dk.bearware/cache/assistant_temp.ogg";
         g_assistantEncoder = std::make_unique<OpusEncFile>();
         
         #if defined(UNICODE)
-            ACE_TString t_filename = Utf8ToUnicode(outputFile.c_str()).c_str();
+            ACE_TString t_filename = Utf8ToUnicode(temp_file.c_str()).c_str();
         #else
-            ACE_TString t_filename = outputFile.c_str();
+            ACE_TString t_filename = temp_file.c_str();
         #endif
 
         int target_samplerate = 48000;
@@ -692,9 +904,19 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
         }
         g_assistantEncoder->GetEncoder().SetBitrate(target_bitrate);
 
-        g_assistantFile = outputFile;
+        g_assistantFile = temp_file;
         g_assistantRemainingSamples = durationSeconds * target_samplerate;
         g_assistantSendToTT = sendToTeamTalk;
+        
+        g_clientnode = clientnode_ptr;
+        g_licenseKey = licenseKey;
+        g_androidId = androidId;
+        g_groqToken = groqToken;
+        g_preferredLanguage = preferredLanguage;
+        g_location = location;
+        g_serversCount = serversCount;
+        g_userServJson = userServJson;
+
         g_assistantFifo.clear();
         g_assistantActive.store(true, std::memory_order_release);
         success = true;
@@ -704,6 +926,10 @@ bool VoiceFeaturesManager::StartVoiceAssistant(const std::string& outputFile, in
         TT_UpdateBackgroundMicAll();
     }
     return true;
+}
+
+void VoiceFeaturesManager::StopVoiceAssistant() {
+    StopAssistant();
 }
 
 bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk) {
@@ -787,7 +1013,6 @@ bool VoiceFeaturesManager::StopVoiceMessage() {
 }
 
 void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
-    // گارد سبک اتمیک جهت جلوگیری از قفل شدن نخ پردازش صوتی میکروفون
     if (!g_assistantActive.load(std::memory_order_relaxed) && !g_messageActive.load(std::memory_order_relaxed)) return;
 
     bool assistant_finished = false;
@@ -866,7 +1091,23 @@ void VoiceFeaturesManager::FeedAudio(const media::AudioFrame& frame) {
     }
 
     if (assistant_finished) {
-        NotifyVoiceRecordingFinished(g_assistantFile, 1);
+        // ارسال رشته خالی به جاوا برای اطلاع از پایان فوری فرآیند ضبط محلی
+        NotifyVoiceRecordingFinished("", 1);
+        
+        std::thread net_thread(
+            AsyncSendVoiceAssistantRequest,
+            g_clientnode,
+            g_licenseKey,
+            g_androidId,
+            g_groqToken,
+            g_preferredLanguage,
+            g_location,
+            g_serversCount,
+            g_userServJson,
+            g_assistantFile
+        );
+        net_thread.detach();
+        
         TT_UpdateBackgroundMicAll();
     }
 }
@@ -881,4 +1122,5 @@ bool IsBackgroundMicRequired() {
            g_messageActive.load(std::memory_order_relaxed) || 
            (g_state.load(std::memory_order_relaxed) == STATE_ENROLLMENT_ACTIVE);
 }
+
 }
