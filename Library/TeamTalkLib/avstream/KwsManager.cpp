@@ -15,6 +15,11 @@
 #include <fstream>
 #include <thread>
 
+struct ClientInstance {
+    std::shared_ptr<void> eventhandler; // استفاده از void جهت سازگاری و عدم نیاز به هدرهای اضافی
+    std::shared_ptr<teamtalk::ClientNode> clientnode;
+};
+
 extern "C" void TT_UpdateBackgroundMicAll();
 
 namespace teamtalk {
@@ -696,7 +701,11 @@ static void CollectUsersNative(const clientchannel_t& root, std::ostringstream& 
 
 static std::string BuildAssistantContextNative(void* clientnode_ptr, int serversCount, const std::string& userServJson) {
     if (clientnode_ptr == nullptr) return "{}";
-    auto* clientnode = static_cast<ClientNode*>(clientnode_ptr);
+    
+    auto* instance = static_cast<ClientInstance*>(clientnode_ptr);
+    if (!instance || !instance->clientnode) return "{}";
+    
+    auto* clientnode = instance->clientnode.get();
     
     std::ostringstream oss;
     oss << "{";
@@ -810,9 +819,11 @@ static void AsyncSendVoiceAssistantRequest(
                 response.find("NOT_FOUND") != std::string::npos) {
                 
                 if (clientnode_ptr != nullptr) {
-                    auto* clientnode = static_cast<ClientNode*>(clientnode_ptr);
-                    clientnode->Disconnect();
-                    MYTRACE(ACE_TEXT("Voice Assistant: Native auto-disconnect triggered due to License Error.\n"));
+                    auto* instance = static_cast<ClientInstance*>(clientnode_ptr);
+                    if (instance && instance->clientnode) {
+                        instance->clientnode->Disconnect();
+                        MYTRACE(ACE_TEXT("Voice Assistant: Native auto-disconnect triggered due to License Error.\n"));
+                    }
                 }
             }
         }

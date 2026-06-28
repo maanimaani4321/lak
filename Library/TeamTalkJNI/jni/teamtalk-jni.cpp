@@ -624,6 +624,7 @@ extern "C" {
         teamtalk::KwsInit(vm);
 
         TTInstance* inst = GetTTInstance(env, thiz);
+        if (inst == nullptr) return JFALSE;
 
         return teamtalk::VoiceFeaturesManager::Instance().StartVoiceAssistant(
             inst, temp_file, lic, aid, tok, lang, loc, (int)serversCount, user_serv, (int)durationSeconds, sendToTeamTalk != 0
