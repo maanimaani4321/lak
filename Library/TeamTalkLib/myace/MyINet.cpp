@@ -206,12 +206,16 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
                     request().set(v.first.c_str(), v.second.c_str());
                 }
 
+                if (m_contentlen > 0)
+                {
+                    request().set_content_length(m_contentlen);
+                }
+
                 auto& os = this->session()->send_request(this->request());
                 if (os)
                 {
                     if (m_contentlen > 0)
                     {
-                        request().set_content_length(m_contentlen);
                         os.write(m_content, m_contentlen);
                     }
 
