@@ -837,47 +837,6 @@ static void AsyncSendVoiceAssistantRequest(
     }
 }
 
-static void StopAssistant() {
-    bool was_active = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(g_mutex);
-        if (g_assistantActive.load(std::memory_order_relaxed)) {
-            g_assistantActive.store(false, std::memory_order_release);
-            if (g_assistantEncoder) {
-                if (!g_assistantFifo.empty()) {
-                    g_assistantFifo.resize(960, 0);
-                    g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
-                }
-                g_assistantEncoder->Close();
-                g_assistantEncoder.reset();
-            }
-            g_assistantResampler.reset();
-            g_assistantFifo.clear();
-            g_assistantSendToTT = true;
-            was_active = true;
-        }
-    }
-
-    if (was_active) {
-        NotifyVoiceRecordingFinished("", 1);
-        TT_UpdateBackgroundMicAll();
-
-        std::thread net_thread(
-            AsyncSendVoiceAssistantRequest,
-            g_clientnode,
-            g_licenseKey,
-            g_androidId,
-            g_groqToken,
-            g_preferredLanguage,
-            g_location,
-            g_serversCount,
-            g_userServJson,
-            g_assistantFile
-        );
-        net_thread.detach();
-    }
-}
-
 VoiceFeaturesManager& VoiceFeaturesManager::Instance() {
     static VoiceFeaturesManager instance;
     return instance;
@@ -962,7 +921,44 @@ bool VoiceFeaturesManager::StartVoiceAssistant(
 }
 
 void VoiceFeaturesManager::StopVoiceAssistant() {
-    StopAssistant();
+    bool was_active = false;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        if (g_assistantActive.load(std::memory_order_relaxed)) {
+            g_assistantActive.store(false, std::memory_order_release);
+            if (g_assistantEncoder) {
+                if (!g_assistantFifo.empty()) {
+                    g_assistantFifo.resize(960, 0);
+                    g_assistantEncoder->Encode(g_assistantFifo.data(), 960, true);
+                }
+                g_assistantEncoder->Close();
+                g_assistantEncoder.reset();
+            }
+            g_assistantResampler.reset();
+            g_assistantFifo.clear();
+            g_assistantSendToTT = true;
+            was_active = true;
+        }
+    }
+
+    if (was_active) {
+        NotifyVoiceRecordingFinished("", 1);
+        TT_UpdateBackgroundMicAll();
+
+        std::thread net_thread(
+            AsyncSendVoiceAssistantRequest,
+            g_clientnode,
+            g_licenseKey,
+            g_androidId,
+            g_groqToken,
+            g_preferredLanguage,
+            g_location,
+            g_serversCount,
+            g_userServJson,
+            g_assistantFile
+        );
+        net_thread.detach();
+    }
 }
 
 bool VoiceFeaturesManager::StartVoiceMessage(const std::string& outputFile, bool sendToTeamTalk) {

@@ -212,7 +212,7 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
                     if (m_contentlen > 0)
                     {
                         request().set_content_length(m_contentlen);
-                        os << m_content;
+                        os.write(m_content, m_contentlen);
                     }
 
                     if (this->session()->receive_response(this->response()))
