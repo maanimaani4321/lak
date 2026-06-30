@@ -792,11 +792,15 @@ static void AsyncSendVoiceAssistantRequest(
         std::vector<char> file_data((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         file.close();
 
+        // مهدی
+        MYTRACE(ACE_TEXT("Voice Assistant Upload: File opened successfully. Size: %d bytes\n"), (int)file_data.size());
         body << "--" << boundary << "\r\n";
         body << "Content-Disposition: form-data; name=\"audio\"; filename=\"audio.ogg\"\r\n";
         body << "Content-Type: audio/ogg\r\n\r\n";
         body.write(file_data.data(), file_data.size());
         body << "\r\n";
+    } else {
+    MYTRACE(ACE_TEXT("Voice Assistant Upload Error: Failed to open temporary audio file: %s\n"), audioFilePath.c_str());
     }
     body << "--" << boundary << "--\r\n";
 

@@ -219,6 +219,7 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
                         os.write(m_content, m_contentlen);
                     }
 
+                    os.flush();
                     if (this->session()->receive_response(this->response()))
                         return this->response_stream();
                 }
