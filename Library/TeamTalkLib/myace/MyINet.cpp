@@ -1,26 +1,4 @@
-/*
- * Copyright (c) 2005-2018, BearWare.dk
- *
- * Contact Information:
- *
- * Bjoern D. Rasmussen
- * Kirketoften 5
- * DK-8260 Viby J
- * Denmark
- * Email: contact@bearware.dk
- * Phone: +45 20 20 54 59
- * Web: http://www.bearware.dk
- *
- * This source code is part of the TeamTalk SDK owned by
- * BearWare.dk. Use of this file, or its compiled unit, requires a
- * TeamTalk SDK License Key issued by BearWare.dk.
- *
- * The TeamTalk SDK License Agreement along with its Terms and
- * Conditions are outlined in the file License.txt included with the
- * TeamTalk SDK distribution.
- *
- */
-
+#include <android/log.h>
 #include "MyINet.h"
 #include "MyACE.h"
 
@@ -180,23 +158,28 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
         }
 
         // 90% copy-paste from ClientRequestHandler::handle_get_request()
-        std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
+std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
         {
+            __android_log_print(ANDROID_LOG_INFO, "TT_NET", "handle_post_request: Targeting host: %s, Scheme: %s", http_url.get_host().c_str(), http_url.get_scheme().c_str());
             bool connected = false;
-            if (http_url.has_proxy())
+            if (http_url.has_proxy()) {
+                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Connecting using proxy: %s:%d", http_url.get_proxy_host().c_str(), http_url.get_proxy_port());
                 connected = this->initialize_connection(http_url.get_scheme(),
                     http_url.get_host(),
                     http_url.get_port(),
                     true,
                     http_url.get_proxy_host(),
                     http_url.get_proxy_port());
-            else
+            } else {
+                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Connecting directly to target server...");
                 connected = this->initialize_connection(http_url.get_scheme(),
                     http_url.get_host(),
                     http_url.get_port());
+            }
 
             if (connected)
             {
+                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Socket connection established successfully.");
                 request().reset(request().get_method(), http_url.get_request_uri(), request().get_version());
 
                 this->initialize_request(http_url, this->request());
@@ -211,24 +194,37 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
                     request().set_content_length(m_contentlen);
                 }
 
+                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Sending request headers. Total Body Content-Length: %d bytes", m_contentlen);
                 auto& os = this->session()->send_request(this->request());
                 if (os)
                 {
                     if (m_contentlen > 0)
                     {
+                        __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Writing body content buffer...");
                         os.write(m_content, m_contentlen);
                     }
 
+                    __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Flushing socket stream output buffer...");
                     os.flush();
-                    if (this->session()->receive_response(this->response()))
+
+                    __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Waiting for server response (this can block)...");
+                    if (this->session()->receive_response(this->response())) {
+                        __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Response received successfully from server.");
                         return this->response_stream();
+                    } else {
+                        __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Failed to receive response headers from server!");
+                    }
+                } else {
+                    __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Failed to write request headers to stream!");
                 }
 
+                __android_log_print(ANDROID_LOG_WARN, "TT_NET", "Forcing connection close on error...");
                 this->close_connection();
                 this->handle_request_error(http_url);
             }
             else
             {
+                __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Connection initialization failed!");
                 this->handle_connection_error(http_url);
             }
 
