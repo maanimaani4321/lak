@@ -158,7 +158,7 @@ int HttpPostRequest(const ACE_CString& url, const char* data, int len,
         }
 
         // 90% copy-paste from ClientRequestHandler::handle_get_request()
-std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
+        std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
         {
             __android_log_print(ANDROID_LOG_INFO, "TT_NET", "handle_post_request: Targeting host: %s, Scheme: %s", http_url.get_host().c_str(), http_url.get_scheme().c_str());
             bool connected = false;
@@ -180,11 +180,13 @@ std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
             if (connected)
             {
                 __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Socket connection established successfully.");
-                request().reset(request().get_method(), http_url.get_request_uri(), request().get_version());
+                
+                // تغییر پروتکل به HTTP/1.0 برای غیرفعال کردن Chunked Encoding در پاسخ سرور و دریافت فوری پاسخ هدرها
+                request().reset(request().get_method(), http_url.get_request_uri(), "HTTP/1.0");
 
                 this->initialize_request(http_url, this->request());
 
-                // تزریق هدرهای استاندارد مرورگر برای عبور مستقیم از سیستم‌های بلاک و لایه‌ی حفاظتی CDN اروان‌کلاود
+                // تزریق هدرهای استاندارد مرورگر برای عبور مستقیم از فایروال‌های لایه‌ی ۷
                 request().set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
                 request().set("Accept", "*/*");
                 request().set("Accept-Language", "fa,en-US;q=0.9,en;q=0.8");
@@ -209,7 +211,6 @@ std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
                         __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Writing body content buffer...");
                         os.write(m_content, m_contentlen);
                         
-                        // بررسی اینکه آیا جریان بافر بعد از نوشتن همچنان سالم است یا با خطا متوقف شده
                         if (!os.good()) {
                             __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Stream state is BAD/FAIL after write!");
                         }
