@@ -3,15 +3,8 @@
 #include "MyACE.h"
 
 #include <ace/INET_Addr.h>
-#include <ace/INet/HTTP_ClientRequestHandler.h>
-#include <ace/INet/HTTP_URL.h>
-#include <ace/INet/URLBase.h>
-
-#if defined(ENABLE_ENCRYPTION)
-#include <ace/INet/HTTPS_SessionFactory.h>
-#endif
-
 #include <ace/OS.h>
+
 #if defined(WIN32)
 #else
 #include <arpa/inet.h>
@@ -24,242 +17,123 @@
 #include <iomanip>
 #include <memory>
 #include <sstream>
+#include <string>
+#include <map>
+#include <vector>
 
-std::vector<ACE_INET_Addr> DetermineHostAddress(const ACE_TString& host, uint16_t port)
-{
-    std::vector<ACE_INET_Addr> result;
+// ۱. تعریف پشتیبانی از OpenSSL و هدر httplib
+#define CPPHTTPLIB_OPENSSL_SUPPORT
+#include "httplib.h"
 
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM; // ensure no duplicate IP-addresses
-
-    addrinfo* res = nullptr;
-    const int addrinfoerror = ACE_OS::getaddrinfo(UnicodeToUtf8(host).c_str(), nullptr, &hints, &res);
-    if (addrinfoerror != 0)
-    {
-        MYTRACE(ACE_TEXT("Failed to resolve %s. Error: %d"), host.c_str(), addrinfoerror);
-        return {};
-    }
-
-    for (addrinfo* curr = res; curr != nullptr; curr = curr->ai_next)
-    {
-        union ip46
-        {
-            sockaddr_in  in4_;
-#if defined (ACE_HAS_IPV6)
-            sockaddr_in6 in6_;
-#endif /* ACE_HAS_IPV6 */
-        } addr{};
-
-        ACE_OS::memcpy(&addr, curr->ai_addr, curr->ai_addrlen);
-#ifdef ACE_HAS_IPV6
-        if (curr->ai_family == AF_INET6)
-        {
-            addr.in6_.sin6_port = htons(port);
-            result.emplace_back(reinterpret_cast<const sockaddr_in*>(&addr.in6_), sizeof(addr.in6_));
+// تابع کمکی برای تفکیک بخش هاست و مسیر از کل آدرس URL
+void ParseUrl(const std::string& url, std::string& base_url, std::string& path) {
+    size_t scheme_end = url.find("://");
+    if (scheme_end == std::string::npos) {
+        size_t path_start = url.find("/");
+        if (path_start == std::string::npos) {
+            base_url = "http://" + url;
+            path = "/";
+        } else {
+            base_url = "http://" + url.substr(0, path_start);
+            path = url.substr(path_start);
         }
-        else
-#endif
-        {
-            addr.in4_.sin_port = htons(port);
-            result.emplace_back(reinterpret_cast<const sockaddr_in*>(&addr.in4_), sizeof(addr.in4_));
+    } else {
+        size_t host_start = scheme_end + 3;
+        size_t path_start = url.find("/", host_start);
+        if (path_start == std::string::npos) {
+            base_url = url;
+            path = "/";
+        } else {
+            base_url = url.substr(0, path_start);
+            path = url.substr(path_start);
         }
     }
-
-    ACE_OS::freeaddrinfo(res);
-
-    return result;
 }
 
-static void AceSingletons()
-{
-#if defined(ENABLE_ENCRYPTION)
-#if defined(ENABLE_TEAMTALKACE)
-    // Enable SNI enabled HTTPS sessions
-    ACE::HTTPS::SessionFactory_Impl::registerHTTPS();
-#else
-    // HTTPS session factory is not instantiated unless specified explicitly
-    ACE_Singleton<ACE::HTTPS::SessionFactory_Impl, ACE_SYNCH::NULL_MUTEX>::instance();
-#endif /* ENABLE_TEAMTALKACE */
-#endif /* ENABLE_ENCRYPTION */
-}
-
-int HttpGetRequest(const ACE_CString& url, std::string& result, ACE::HTTP::Status::Code* statusCode /*= nullptr*/)
-{
-    AceSingletons();
-
-    std::unique_ptr<ACE::INet::URL_Base> url_safe(ACE::INet::URL_Base::create_from_string(url));
-    if (!url_safe)
-        return -1;
-
-    ACE::HTTP::ClientRequestHandler http;
-    ACE::INet::URLStream urlin = url_safe->open(http);
-
-    std::ostringstream oss;
-    oss << urlin->rdbuf();
-    result = oss.str();
-
-    ACE::HTTP::Status const httpCode = http.response().get_status();
-#if defined(UNICODE)
-    MYTRACE_COND(!httpCode.is_ok(), ACE_TEXT("HTTP request failed:\n%s\n"),
-        Utf8ToUnicode(result.c_str()).c_str());
-#else
-    MYTRACE_COND(!httpCode.is_ok(), ACE_TEXT("HTTP request failed:\n%s\n"), result.c_str());
-#endif
-    if (statusCode != nullptr)
-        *statusCode = httpCode.get_status();
-
-    if (!httpCode.is_valid() || httpCode.get_status() == ACE::HTTP::Status::HTTP_NONE ||
-        httpCode.get_status() >= ACE::HTTP::Status::HTTP_INTERNAL_SERVER_ERROR)
-        return -1;
-
-    return httpCode.is_ok() ? 1 : 0;
-}
-
+// تابع ارسال فایل/داده به صورت POST با استفاده از cpp-httplib
 int HttpPostRequest(const ACE_CString& url, const char* data, int len,
                     const std::map<std::string, std::string>& headers,
                     std::string& result, ACE::HTTP::Status::Code* statusCode /*= nullptr*/)
 {
-    AceSingletons();
+    std::string url_str(url.c_str());
+    std::string base_url, path;
+    ParseUrl(url_str, base_url, path);
 
-    std::unique_ptr<ACE::INet::URL_Base> url_safe(ACE::INet::URL_Base::create_from_string(url));
-    if (!url_safe)
+    __android_log_print(ANDROID_LOG_INFO, "TT_NET", "httplib POST: Base=%s, Path=%s", base_url.c_str(), path.c_str());
+
+    // ساخت کلاینت (به طور خودکار نوع اتصال http یا https را تشخیص می‌دهد)
+    httplib::Client cli(base_url);
+
+    // غیرفعال کردن موقت تایید گواهی برای جلوگیری از باگ عدم لود روت سرتیفیکیت‌ها در اندروید
+    cli.enable_server_certificate_verification(false);
+
+    // تنظیم تایم‌اوت‌های استاندارد ۱۵ ثانیه‌ای
+    cli.set_connection_timeout(15, 0);
+    cli.set_read_timeout(15, 0);
+    cli.set_write_timeout(15, 0);
+
+    // آماده‌سازی هدرها برای کتابخانه جدید
+    httplib::Headers httplib_headers;
+    std::string content_type = "application/octet-stream"; // پیش‌فرض برای دیتای باینری
+
+    for (const auto& h : headers) {
+        if (h.first == "Content-Type" || h.first == "content-type") {
+            content_type = h.second;
+        } else {
+            httplib_headers.emplace(h.first, h.second);
+        }
+    }
+
+    // ارسال درخواست POST
+    auto res = cli.Post(path, httplib_headers, data, len, content_type);
+
+    if (res) {
+        if (statusCode != nullptr) {
+            *statusCode = static_cast<ACE::HTTP::Status::Code>(res->status);
+        }
+        result = res->body; // پاسخ سرور به طور کامل در این متغیر قرار می‌گیرد
+        __android_log_print(ANDROID_LOG_INFO, "TT_NET", "httplib POST success! Status: %d, Size: %d bytes", res->status, (int)result.size());
+        
+        return (res->status >= 200 && res->status < 300) ? 1 : 0;
+    } else {
+        auto err = res.error();
+        __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "httplib POST failed! Error code: %d", (int)err);
+        if (statusCode != nullptr) {
+            *statusCode = ACE::HTTP::Status::HTTP_INTERNAL_SERVER_ERROR;
+        }
         return -1;
-
-    class MyRequest : public ACE::HTTP::ClientRequestHandler
-    {
-        const std::map<std::string, std::string>& m_headers;
-        const char* m_content;
-        int m_contentlen;
-    public:
-        MyRequest(const char* content, int contentlen, const std::map<std::string, std::string>& headers) : m_content(content), m_contentlen(contentlen), m_headers(headers)
-        {
-            request().set_method(ACE::HTTP::Request::HTTP_POST);
-        }
-
-    protected:
-
-        // 10% copy-paste from ClientRequestHandler::handle_open_request()
-        std::istream& handle_open_request(const ACE::INet::URL_Base& url) override
-        {
-            if (request().get_method() == ACE::HTTP::Request::HTTP_GET)
-            {
-                return ACE::HTTP::ClientRequestHandler::handle_open_request(url);
-            }
-            if (request().get_method() == ACE::HTTP::Request::HTTP_POST)
-            {
-                const ACE::HTTP::URL& http_url = dynamic_cast<const ACE::HTTP::URL&> (url);
-                return handle_post_request(http_url);
-            }
-            else
-            {
-                return ACE::HTTP::ClientRequestHandler::handle_open_request(url);
-            }
-        }
-
-        // 90% copy-paste from ClientRequestHandler::handle_get_request()
-        std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
-        {
-            __android_log_print(ANDROID_LOG_INFO, "TT_NET", "handle_post_request: Targeting host: %s, Scheme: %s", http_url.get_host().c_str(), http_url.get_scheme().c_str());
-            bool connected = false;
-            if (http_url.has_proxy()) {
-                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Connecting using proxy: %s:%d", http_url.get_proxy_host().c_str(), http_url.get_proxy_port());
-                connected = this->initialize_connection(http_url.get_scheme(),
-                    http_url.get_host(),
-                    http_url.get_port(),
-                    true,
-                    http_url.get_proxy_host(),
-                    http_url.get_proxy_port());
-            } else {
-                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Connecting directly to target server...");
-                connected = this->initialize_connection(http_url.get_scheme(),
-                    http_url.get_host(),
-                    http_url.get_port());
-            }
-
-            if (connected)
-            {
-                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Socket connection established successfully.");
-                
-                // تغییر پروتکل به HTTP/1.0 برای غیرفعال کردن Chunked Encoding در پاسخ سرور و دریافت فوری پاسخ هدرها
-                request().reset(request().get_method(), http_url.get_request_uri(), "HTTP/1.0");
-
-                this->initialize_request(http_url, this->request());
-
-                // تزریق هدرهای استاندارد مرورگر برای عبور مستقیم از فایروال‌های لایه‌ی ۷
-                request().set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-                request().set("Accept", "*/*");
-                request().set("Accept-Language", "fa,en-US;q=0.9,en;q=0.8");
-                request().set("Connection", "close");
-
-                for (const auto& v : m_headers)
-                {
-                    request().set(v.first.c_str(), v.second.c_str());
-                }
-
-                if (m_contentlen > 0)
-                {
-                    request().set_content_length(m_contentlen);
-                }
-
-                __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Sending request headers. Total Body Content-Length: %d bytes", m_contentlen);
-                auto& os = this->session()->send_request(this->request());
-                if (os)
-                {
-                    if (m_contentlen > 0)
-                    {
-                        __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Writing body content buffer...");
-                        os.write(m_content, m_contentlen);
-                        
-                        if (!os.good()) {
-                            __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Stream state is BAD/FAIL after write!");
-                        }
-                    }
-
-                    __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Flushing socket stream output buffer...");
-                    os.flush();
-                    
-                    if (!os.good()) {
-                        __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Stream state is BAD/FAIL after flush!");
-                    }
-
-                    __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Waiting for server response (this can block)...");
-                    if (this->session()->receive_response(this->response())) {
-                        __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Response received successfully from server.");
-                        return this->response_stream();
-                    } else {
-                        __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Failed to receive response headers from server!");
-                    }
-                } else {
-                    __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Failed to write request headers to stream!");
-                }
-
-                __android_log_print(ANDROID_LOG_WARN, "TT_NET", "Forcing connection close on error...");
-                this->close_connection();
-                this->handle_request_error(http_url);
-            }
-            else
-            {
-                __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Connection initialization failed!");
-                this->handle_connection_error(http_url);
-            }
-
-            return this->response_stream();
-        }
-
-    } http(data, len, headers);
-
-    ACE::INet::URLStream urlin = url_safe->open(http);
-    std::ostringstream oss;
-    oss << urlin->rdbuf();
-    result = oss.str();
-    auto httpCode = http.response().get_status();
-    if (statusCode != nullptr)
-        *statusCode = httpCode.get_status();
-
-    return httpCode.is_ok() ? 1 : 0;
+    }
 }
 
+// تابع دریافت داده به صورت GET با استفاده از cpp-httplib
+int HttpGetRequest(const ACE_CString& url, std::string& result, ACE::HTTP::Status::Code* statusCode /*= nullptr*/)
+{
+    std::string url_str(url.c_str());
+    std::string base_url, path;
+    ParseUrl(url_str, base_url, path);
+
+    httplib::Client cli(base_url);
+    cli.enable_server_certificate_verification(false);
+    cli.set_connection_timeout(15, 0);
+    cli.set_read_timeout(15, 0);
+
+    auto res = cli.Get(path);
+
+    if (res) {
+        if (statusCode != nullptr) {
+            *statusCode = static_cast<ACE::HTTP::Status::Code>(res->status);
+        }
+        result = res->body;
+        return (res->status >= 200 && res->status < 300) ? 1 : 0;
+    } else {
+        if (statusCode != nullptr) {
+            *statusCode = ACE::HTTP::Status::HTTP_INTERNAL_SERVER_ERROR;
+        }
+        return -1;
+    }
+}
+
+// پیاده‌سازی متد ارسال فرم داده‌های آدرس‌دهی شده
 int HttpPostRequest(const ACE_CString& url, const std::map<std::string,std::string>& unencodedformdata,
                     std::string& result, ACE::HTTP::Status::Code* statusCode/* = nullptr*/)
 {
@@ -284,20 +158,61 @@ std::string URLEncode(const std::string& utf8)
 
     for (char c : utf8)
     {
-        // Keep alphanumeric and other accepted characters intact
         if ((isalnum(c) != 0) || c == '-' || c == '_' || c == '.' || c == '~')
         {
             escaped << c;
             continue;
         }
 
-        // Any other characters are percent-encoded
         escaped << std::uppercase;
         escaped << '%' << std::setw(2) << int((unsigned char)c);
         escaped << std::nouppercase;
     }
 
     return escaped.str();
+}
+
+std::vector<ACE_INET_Addr> DetermineHostAddress(const ACE_TString& host, uint16_t port)
+{
+    std::vector<ACE_INET_Addr> result;
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+
+    addrinfo* res = nullptr;
+    const int addrinfoerror = ACE_OS::getaddrinfo(UnicodeToUtf8(host).c_str(), nullptr, &hints, &res);
+    if (addrinfoerror != 0)
+    {
+        return {};
+    }
+
+    for (addrinfo* curr = res; curr != nullptr; curr = curr->ai_next)
+    {
+        union ip46
+        {
+            sockaddr_in  in4_;
+#if defined (ACE_HAS_IPV6)
+            sockaddr_in6 in6_;
+#endif
+        } addr{};
+
+        ACE_OS::memcpy(&addr, curr->ai_addr, curr->ai_addrlen);
+#ifdef ACE_HAS_IPV6
+        if (curr->ai_family == AF_INET6)
+        {
+            addr.in6_.sin6_port = htons(port);
+            result.emplace_back(reinterpret_cast<const sockaddr_in*>(&addr.in6_), sizeof(addr.in6_));
+        }
+        else
+#endif
+        {
+            addr.in4_.sin_port = htons(port);
+            result.emplace_back(reinterpret_cast<const sockaddr_in*>(&addr.in4_), sizeof(addr.in4_));
+        }
+    }
+
+    ACE_OS::freeaddrinfo(res);
+    return result;
 }
 
 ACE_TString InetAddrToString(const ACE_INET_Addr& addr)

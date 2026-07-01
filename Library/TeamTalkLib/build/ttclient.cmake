@@ -36,6 +36,7 @@ set (TTCLIENT_HEADERS
   ${TEAMTALKLIB_ROOT}/codec/WaveFile.h
   ${TEAMTALKLIB_ROOT}/license/Trial.h
   ${TEAMTALKLIB_ROOT}/teamtalk/SecurityCheck.h
+  ${TEAMTALKLIB_ROOT}/myace/httplib.h
   ${TEAMTALKLIB_ROOT}/myace/MyACE.h
   ${TEAMTALKLIB_ROOT}/myace/MyINet.h
   ${TEAMTALKLIB_ROOT}/myace/TimerHandler.h
