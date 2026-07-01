@@ -184,6 +184,12 @@ std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
 
                 this->initialize_request(http_url, this->request());
 
+                // تزریق هدرهای استاندارد مرورگر برای عبور مستقیم از سیستم‌های بلاک و لایه‌ی حفاظتی CDN اروان‌کلاود
+                request().set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                request().set("Accept", "*/*");
+                request().set("Accept-Language", "fa,en-US;q=0.9,en;q=0.8");
+                request().set("Connection", "close");
+
                 for (const auto& v : m_headers)
                 {
                     request().set(v.first.c_str(), v.second.c_str());
@@ -202,10 +208,19 @@ std::istream& handle_post_request(const ACE::HTTP::URL& http_url)
                     {
                         __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Writing body content buffer...");
                         os.write(m_content, m_contentlen);
+                        
+                        // بررسی اینکه آیا جریان بافر بعد از نوشتن همچنان سالم است یا با خطا متوقف شده
+                        if (!os.good()) {
+                            __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Stream state is BAD/FAIL after write!");
+                        }
                     }
 
                     __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Flushing socket stream output buffer...");
                     os.flush();
+                    
+                    if (!os.good()) {
+                        __android_log_print(ANDROID_LOG_ERROR, "TT_NET", "CRITICAL ERROR: Stream state is BAD/FAIL after flush!");
+                    }
 
                     __android_log_print(ANDROID_LOG_INFO, "TT_NET", "Waiting for server response (this can block)...");
                     if (this->session()->receive_response(this->response())) {
