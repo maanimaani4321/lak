@@ -767,7 +767,7 @@ static void AsyncSendVoiceAssistantRequest(
     const std::string& userServJson,
     const std::string& audioFilePath
 ) {
-    std::string url = (location == "IR") ? "https://api.djfa.ir/voice/index.php" : "https://api.rnvda.ir/voice/index.php";
+    std::string url = (location == "IR") ? "https://hpotter.mahdih.ir/voice/index.php" : "https://api.rnvda.ir/voice/index.php";
     
     std::string contextJson = BuildAssistantContextNative(clientnode_ptr, serversCount, userServJson);
     
